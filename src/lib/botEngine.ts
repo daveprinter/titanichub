@@ -628,7 +628,10 @@ export class BotEngine {
 
 
   private async placeTrade() {
-    if (this.buying || !this.running || this.paused || this.switching) return;
+    const everyTick = this.cfg.speed === "everytick";
+    if (!this.running || this.paused || this.switching) return;
+    // Every-tick mode allows overlapping purchases; normal speed does not.
+    if (this.buying && !everyTick) return;
     this.buying = true;
     const stake = round2(this.currentStake);
     const barrier = this.pickDigit(this.cfg.differ);
