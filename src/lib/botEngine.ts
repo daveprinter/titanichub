@@ -170,6 +170,15 @@ export class BotEngine {
   private currentStake = 0;
   private stats = emptyStats();
   private skipTick = false;
+  private tickSeq = 0;
+  private tickWaiters: Array<() => void> = [];
+
+  /** Resolves on the next incoming tick (used to pace recovery at normal speed). */
+  private waitForTick(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.tickWaiters.push(resolve);
+    });
+  }
 
 
   // selection cursors
