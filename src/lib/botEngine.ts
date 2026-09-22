@@ -530,6 +530,10 @@ export class BotEngine {
         this.evaluateSwitch(false);
         if (!this.running) break;
         if (stage === 1 && rec.afterLoss.enabled) this.recoveryStage = 2;
+
+        // Recovery follows the selected speed mode: every-tick re-enters straight
+        // away, normal speed leaves one idle tick between recovery rounds.
+        if (this.cfg.speed !== "everytick" && this.running) await this.waitForTick();
       }
     } catch (error: any) {
       const reason = error?.message || "Recovery trade failed";
