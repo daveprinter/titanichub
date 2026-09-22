@@ -312,13 +312,17 @@ export class BotEngine {
     this.tickSeq++;
     this.tickWaiters.splice(0).forEach((resolve) => resolve());
 
-    // Settle the in-flight differs contract on the FIRST tick after purchase.
-    if (this.pendings.length > 0) {
-      const p = this.pendings.shift()!;
-      const win = isWinFor(p.type, digit, p.barrier);
-      const profit = win ? round2(p.payout - p.buyPrice) : -p.buyPrice;
-      this.processResult(win, profit, digit, p, priceStr);
-      if (!this.running) return;
+    // Settle every differs contract bought on an earlier tick. In every-tick mode
+    // several can be in flight at once, so settle ALL that are due on this tick.
+    const due = this.pendings.filter((p) => p.tickId < this.tickSeq);
+    if (due.length > 0) {
+      this.pendings = this.pendings.filter((p) => p.tickId >= this.tickSeq);
+      for (const p of due) {
+        const win = isWinFor(p.type, digit, p.barrier);
+        const profit = win ? round2(p.payout - p.buyPrice) : -p.buyPrice;
+        this.processResult(win, profit, digit, p, priceStr);
+        if (!this.running) return;
+      }
       if (!everyTick) this.skipTick = true;
     }
 
