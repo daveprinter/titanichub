@@ -299,6 +299,8 @@ export class BotEngine {
     this.cb.onTick(priceStr, digit);
 
     const everyTick = this.cfg.speed === "everytick";
+    this.tickSeq++;
+    this.tickWaiters.splice(0).forEach((resolve) => resolve());
 
     // Settle the in-flight differs contract on the FIRST tick after purchase.
     if (this.pendings.length > 0) {
@@ -312,15 +314,20 @@ export class BotEngine {
 
     if (!this.running || this.paused || this.switching) return;
     if (this.recoveryStage > 0 || this.recoveryBusy) return;
-    if (this.buying || this.pendings.length > 0) return;
 
-    if (!everyTick && this.skipTick) {
-      this.skipTick = false;
+    if (!everyTick) {
+      // Normal speed: one contract at a time, and one idle tick after a result.
+      if (this.buying || this.pendings.length > 0) return;
+      if (this.skipTick) {
+        this.skipTick = false;
+        return;
+      }
+      void this.placeTrade();
       return;
     }
 
-    // Every-tick mode re-enters on the SAME tick that settled the previous
-    // contract, using the freshly updated (martingale) stake.
+    // Every-tick mode: fire a fresh contract on EVERY tick, using the stake
+    // that martingale has just updated, without waiting for older contracts.
     this.skipTick = false;
     void this.placeTrade();
   }
