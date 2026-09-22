@@ -134,6 +134,26 @@ export const SIDE_CONTRACT: Record<RecoverySide, ContractType> = {
 
 export const MIN_RECOVERY_TICKS = 2;
 
+/**
+ * Only account-level problems end a run. Everything else (a rejected proposal,
+ * a market hiccup, a slow settlement) is retried on the next tick.
+ */
+function isFatalTradeError(message: string) {
+  const m = message.toLowerCase();
+  return (
+    m.includes("insufficient") ||
+    m.includes("balance") ||
+    m.includes("authoriz") ||
+    m.includes("authentic") ||
+    m.includes("token") ||
+    m.includes("not connected") ||
+    m.includes("disconnect") ||
+    m.includes("account") ||
+    m.includes("self-exclusion") ||
+    m.includes("not available for this account")
+  );
+}
+
 function isWinFor(type: ContractType, digit: number, barrier: number | null) {
   switch (type) {
     case "DIGITDIFF":
@@ -165,6 +185,7 @@ export class BotEngine {
     type: ContractType;
     barrier: number | null;
     entrySpot: string;
+    tickId: number;
   }[] = [];
 
   private currentStake = 0;
@@ -311,13 +332,17 @@ export class BotEngine {
     this.tickSeq++;
     this.tickWaiters.splice(0).forEach((resolve) => resolve());
 
-    // Settle the in-flight differs contract on the FIRST tick after purchase.
-    if (this.pendings.length > 0) {
-      const p = this.pendings.shift()!;
-      const win = isWinFor(p.type, digit, p.barrier);
-      const profit = win ? round2(p.payout - p.buyPrice) : -p.buyPrice;
-      this.processResult(win, profit, digit, p, priceStr);
-      if (!this.running) return;
+    // Settle every differs contract bought on an earlier tick. In every-tick mode
+    // several can be in flight at once, so settle ALL that are due on this tick.
+    const due = this.pendings.filter((p) => p.tickId < this.tickSeq);
+    if (due.length > 0) {
+      this.pendings = this.pendings.filter((p) => p.tickId >= this.tickSeq);
+      for (const p of due) {
+        const win = isWinFor(p.type, digit, p.barrier);
+        const profit = win ? round2(p.payout - p.buyPrice) : -p.buyPrice;
+        this.processResult(win, profit, digit, p, priceStr);
+        if (!this.running) return;
+      }
       if (!everyTick) this.skipTick = true;
     }
 
@@ -472,8 +497,8 @@ export class BotEngine {
         this.cb.onStatus(this.recoveryStage > 0 ? "Recovery mode" : "Running");
       })
       .catch((e: any) => {
-        this.stop(e?.message || "Market switch failed");
-        this.cb.onStop(e?.message || "Market switch failed");
+        // Keep trading on the current market instead of ending the run.
+        this.reportTradeIssue(e);
       })
       .finally(() => {
         this.switching = false;
@@ -517,7 +542,19 @@ export class BotEngine {
           if (rec.afterLoss.singleSide && rec.sides.length > 1) sides = [rec.afterLoss.side];
         }
 
-        const net = await this.runRecoveryRound(sides, durations);
+        let net = 0;
+        try {
+          // When hedging, net is the difference between the Only Ups and
+          // Only Downs results — the round only counts as recovered above zero.
+          net = await this.runRecoveryRound(sides, durations);
+        } catch (error: any) {
+          // A failed or slow recovery round is retried; it never ends the run
+          // unless the account itself cannot trade.
+          this.reportTradeIssue(error);
+          if (!this.running) break;
+          await this.waitForTick();
+          continue;
+        }
         if (!this.running) break;
 
         if (net > 0) {
@@ -535,10 +572,6 @@ export class BotEngine {
         // away, normal speed leaves one idle tick between recovery rounds.
         if (this.cfg.speed !== "everytick" && this.running) await this.waitForTick();
       }
-    } catch (error: any) {
-      const reason = error?.message || "Recovery trade failed";
-      this.stop(reason);
-      this.cb.onStop(reason);
     } finally {
       this.recoveryBusy = false;
     }
@@ -643,19 +676,36 @@ export class BotEngine {
 
     try {
       const buy = await this.buyContract("DIGITDIFF", stake, 1, barrier);
+      // Stamp with the tick that was current when Deriv confirmed the buy, so the
+      // contract settles on the next tick — never on a stale one.
+      const tickId = this.tickSeq;
       this.pendings.push({
         buyPrice: Number(buy.buy_price ?? stake),
         payout: Number(buy.payout ?? 0),
         type: "DIGITDIFF",
         barrier,
         entrySpot,
+        tickId,
       });
       this.buying = false;
     } catch (error: any) {
       this.buying = false;
-      this.stop(error?.message || "Trade failed");
-      this.cb.onStop(error?.message || "Trade failed");
+      // A single rejected purchase must never end the run: only a manual stop,
+      // take profit or stop loss does that. Report it and keep trading.
+      this.reportTradeIssue(error);
     }
+  }
+
+  /** Surfaces a non-fatal trade problem without ending the run. */
+  private reportTradeIssue(error: any) {
+    const msg = String(error?.message || "Trade could not be placed");
+    if (!this.running) return;
+    if (isFatalTradeError(msg)) {
+      this.stop(msg);
+      this.cb.onStop(msg);
+      return;
+    }
+    this.cb.onStatus(`Retrying · ${msg}`);
   }
 
   private async buyContract(
