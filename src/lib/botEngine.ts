@@ -165,6 +165,7 @@ export class BotEngine {
     type: ContractType;
     barrier: number | null;
     entrySpot: string;
+    tickId: number;
   }[] = [];
 
   private currentStake = 0;
