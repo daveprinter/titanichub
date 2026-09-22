@@ -2,7 +2,9 @@ import { useState } from "react";
 import { KeyRound, MessageCircle, ShieldAlert, ShieldCheck, ShoppingCart } from "lucide-react";
 
 import { AdminPanel } from "@/components/AdminPanel";
+import { CandlestickBackdrop } from "@/components/CandlestickBackdrop";
 import { HelpAssistant } from "@/components/HelpAssistant";
+import titanicLogo from "@/assets/titanic-logo-b.png";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,10 +25,18 @@ export function LicenseGate({
   const [adminOpen, setAdminOpen] = useState(false);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
-      <Card className="w-full max-w-md p-6">
+    <div className="relative isolate flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10">
+      <CandlestickBackdrop />
+      <div className="absolute inset-0 bg-background/30 backdrop-blur-[1px]" aria-hidden="true" />
+      <Card className="relative z-10 w-full max-w-md border-primary/20 bg-card/92 p-6 shadow-2xl shadow-primary/15 backdrop-blur-xl">
         <div className="flex flex-col items-center text-center">
-          <img src="/icon-192.png" alt="Titanic Hub logo" className="h-16 w-16 rounded-2xl" />
+          <img
+            src={titanicLogo}
+            alt="Titanic Hub ship logo"
+            width={1024}
+            height={1024}
+            className="h-20 w-20 object-contain drop-shadow-lg"
+          />
           <h1 className="mt-4 text-xl font-bold">Titanic Hub</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Licensed automated Deriv digit trading hub — $10 per month, per device.

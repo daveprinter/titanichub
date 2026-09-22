@@ -132,6 +132,84 @@
   --sidebar-ring: oklch(0.551 0.027 264.364);
 }
 
+@keyframes candle-drift {
+  0% { transform: translateY(36px); opacity: 0.18; }
+  45% { opacity: 0.72; }
+  100% { transform: translateY(-54px); opacity: 0.18; }
+}
+
+@keyframes market-line-pulse {
+  0%, 100% { opacity: 0.25; transform: scaleX(0.94); }
+  50% { opacity: 0.58; transform: scaleX(1); }
+}
+
+.license-market-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: linear-gradient(155deg, oklch(0.14 0.045 160), oklch(0.23 0.075 155) 54%, oklch(0.12 0.035 170));
+}
+
+.license-market-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.18;
+  background-image:
+    linear-gradient(to right, oklch(0.75 0.12 155 / 28%) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.75 0.12 155 / 22%) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+
+.license-market-line {
+  position: absolute;
+  left: -5%;
+  right: -5%;
+  top: 52%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, oklch(0.78 0.19 151), transparent);
+  transform-origin: center;
+  animation: market-line-pulse 4s ease-in-out infinite;
+}
+
+.license-candle {
+  --candle-width: 20px;
+  position: absolute;
+  left: var(--candle-left);
+  bottom: calc(17% + var(--candle-offset));
+  width: var(--candle-width);
+  height: var(--candle-height);
+  border-radius: 3px;
+  background: oklch(0.72 0.2 151 / 72%);
+  box-shadow: 0 0 24px oklch(0.72 0.2 151 / 28%);
+  animation: candle-drift var(--candle-duration) ease-in-out var(--candle-delay) infinite alternate;
+}
+
+.license-candle::before {
+  content: "";
+  position: absolute;
+  left: calc(50% - 1px);
+  top: calc((var(--wick-height) - var(--candle-height)) / -2);
+  width: 2px;
+  height: var(--wick-height);
+  background: oklch(0.82 0.13 152 / 74%);
+}
+
+.license-candle-down {
+  background: oklch(0.64 0.2 25 / 52%);
+  box-shadow: 0 0 22px oklch(0.64 0.2 25 / 18%);
+}
+
+.license-candle-down::before {
+  background: oklch(0.72 0.15 25 / 58%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .license-candle,
+  .license-market-line {
+    animation: none;
+  }
+}
+
 @layer base {
   * {
     border-color: var(--color-border);
