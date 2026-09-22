@@ -134,6 +134,26 @@ export const SIDE_CONTRACT: Record<RecoverySide, ContractType> = {
 
 export const MIN_RECOVERY_TICKS = 2;
 
+/**
+ * Only account-level problems end a run. Everything else (a rejected proposal,
+ * a market hiccup, a slow settlement) is retried on the next tick.
+ */
+function isFatalTradeError(message: string) {
+  const m = message.toLowerCase();
+  return (
+    m.includes("insufficient") ||
+    m.includes("balance") ||
+    m.includes("authoriz") ||
+    m.includes("authentic") ||
+    m.includes("token") ||
+    m.includes("not connected") ||
+    m.includes("disconnect") ||
+    m.includes("account") ||
+    m.includes("self-exclusion") ||
+    m.includes("not available for this account")
+  );
+}
+
 function isWinFor(type: ContractType, digit: number, barrier: number | null) {
   switch (type) {
     case "DIGITDIFF":
