@@ -55,11 +55,13 @@ import {
 
 import {
   BotEngine,
+  MIN_RECOVERY_TICKS,
   emptyStats,
-  type DigitSelection,
+  type AfterLossMode,
   type EngineConfig,
   type EngineStats,
-  type RecoveryKind,
+  type RecoverySide,
+  type RecoveryStakeMode,
   type SwitchMode,
   type TradeLog,
   type Transition,
@@ -73,18 +75,20 @@ import { useLicense } from "@/hooks/useLicense";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Pluto AI Trader — Deriv Digit Differs Bot" },
+      { title: "Titanic Hub — Deriv Digit Differs Bot" },
       {
         name: "description",
         content:
-          "Connect your Deriv PAT token, pick a volatility market and automate digit differs trading with martingale, recovery modes and live stats.",
+          "Connect your Deriv token, pick a volatility market and automate digit differs trading with martingale, Only Ups / Only Downs recovery and live stats.",
       },
-      { property: "og:title", content: "Pluto AI Trader — Deriv Digit Differs Bot" },
+      { property: "og:title", content: "Titanic Hub — Deriv Digit Differs Bot" },
       {
         property: "og:description",
         content:
-          "Automated Deriv digit differs trading with martingale, recovery contracts and live profit tracking.",
+          "Automated Deriv digit differs trading with martingale, Only Ups / Only Downs recovery (including hedging) and live profit tracking.",
       },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: PlutoApp,
@@ -109,12 +113,8 @@ function PlutoApp() {
 }
 
 
-const defaultSelection = (digit: number): DigitSelection => ({
-  mode: "single",
-  digit,
-  digits: [],
-  transition: "onloss",
-});
+const ticks = (v: string) => Math.max(MIN_RECOVERY_TICKS, parseInt(v, 10) || MIN_RECOVERY_TICKS);
+const money2 = (v: string) => Math.round((parseFloat(v) || 0.35) * 100) / 100;
 
 const TRANSITIONS: { value: Transition; label: string }[] = [
   { value: "onloss", label: "After one loses" },
@@ -122,12 +122,12 @@ const TRANSITIONS: { value: Transition; label: string }[] = [
   { value: "sequential", label: "Sequentially" },
 ];
 
-const RECOVERY_KINDS: { value: RecoveryKind; label: string }[] = [
-  { value: "over", label: "Over prediction" },
-  { value: "under", label: "Under prediction" },
-  { value: "even", label: "Even prediction" },
-  { value: "odd", label: "Odd prediction" },
+const RECOVERY_SIDES: { value: RecoverySide; label: string; hint: string }[] = [
+  { value: "up", label: "Only Ups", hint: "Every tick must rise" },
+  { value: "down", label: "Only Downs", hint: "Every tick must fall" },
 ];
+
+const sideLabel = (side: RecoverySide) => (side === "up" ? "Only Ups" : "Only Downs");
 
 function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOut: () => void }) {
   const { theme, toggle } = useTheme();
@@ -178,21 +178,29 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
     "onloss",
   );
 
-  // recovery
+  // recovery (Only Ups / Only Downs)
   const [recoveryOn, setRecoveryOn] = usePersistentState("recoveryOn", false);
-  const [recoveryKinds, setRecoveryKinds] = usePersistentState<RecoveryKind[]>(
-    "recoveryKinds",
+  const [recoverySides, setRecoverySides] = usePersistentState<RecoverySide[]>(
+    "recoverySides",
     [],
   );
-  const [kindTransition, setKindTransition] = usePersistentState<Transition>(
-    "kindTransition",
-    "onloss",
+  const [upTicks, setUpTicks] = usePersistentState("recUpTicks", "2");
+  const [downTicks, setDownTicks] = usePersistentState("recDownTicks", "2");
+  const [recStakeMode, setRecStakeMode] = usePersistentState<RecoveryStakeMode>(
+    "recStakeMode",
+    "differs",
   );
-  const [overSel, setOverSel] = usePersistentState<DigitSelection>("overSel", defaultSelection(2));
-  const [underSel, setUnderSel] = usePersistentState<DigitSelection>(
-    "underSel",
-    defaultSelection(7),
+  const [upStake, setUpStake] = usePersistentState("recUpStake", "0.35");
+  const [downStake, setDownStake] = usePersistentState("recDownStake", "0.35");
+  const [afterLossOn, setAfterLossOn] = usePersistentState("recAfterLossOn", false);
+  const [afterLossMode, setAfterLossMode] = usePersistentState<AfterLossMode>(
+    "recAfterLossMode",
+    "different-ticks",
   );
+  const [afterUpTicks, setAfterUpTicks] = usePersistentState("recAfterUpTicks", "3");
+  const [afterDownTicks, setAfterDownTicks] = usePersistentState("recAfterDownTicks", "3");
+  const [afterSingleSide, setAfterSingleSide] = usePersistentState("recAfterSingle", false);
+  const [afterSide, setAfterSide] = usePersistentState<RecoverySide>("recAfterSide", "up");
 
   // market switcher
   const [switcherOn, setSwitcherOn] = usePersistentState("switcherOn", false);
@@ -235,10 +243,17 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
       },
       recovery: {
         enabled: recoveryOn,
-        kinds: recoveryKinds,
-        kindTransition,
-        over: overSel,
-        under: underSel,
+        sides: recoverySides,
+        duration: { up: ticks(upTicks), down: ticks(downTicks) },
+        stakeMode: recStakeMode,
+        stake: { up: money2(upStake), down: money2(downStake) },
+        afterLoss: {
+          enabled: afterLossOn,
+          mode: afterLossMode,
+          duration: { up: ticks(afterUpTicks), down: ticks(afterDownTicks) },
+          singleSide: afterSingleSide,
+          side: afterSide,
+        },
       },
     }),
     [
@@ -254,10 +269,18 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
       differDigits,
       differTransition,
       recoveryOn,
-      recoveryKinds,
-      kindTransition,
-      overSel,
-      underSel,
+      recoverySides,
+      upTicks,
+      downTicks,
+      recStakeMode,
+      upStake,
+      downStake,
+      afterLossOn,
+      afterLossMode,
+      afterUpTicks,
+      afterDownTicks,
+      afterSingleSide,
+      afterSide,
       switcherOn,
       switchMarkets,
       switchMode,
@@ -408,7 +431,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
       toast.error("Select at least one digit to differ");
       return;
     }
-    if (recoveryOn && recoveryKinds.length === 0) {
+    if (recoveryOn && recoverySides.length === 0) {
       toast.error("Select at least one recovery contract");
       return;
     }
@@ -447,9 +470,9 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-30 transform-gpu isolate border-b border-border bg-card [contain:paint]">
         <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3">
-          <img src="/icon-192.png" alt="Pluto Trader logo" className="h-9 w-9 rounded-lg" />
+          <img src="/icon-192.png" alt="Titanic Hub logo" className="h-9 w-9 rounded-lg" />
           <div className="mr-auto">
-            <h1 className="text-base font-bold leading-tight sm:text-lg">Pluto AI Trader</h1>
+            <h1 className="text-base font-bold leading-tight sm:text-lg">Titanic Hub</h1>
             <p className="text-xs text-muted-foreground">
               {connected
                 ? `${accounts.find((a) => a.id === loginid)?.isDemo === false ? "Real" : "Demo"} · ${loginid} · ${balance.toFixed(2)} ${currency}`
@@ -467,7 +490,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
             </SheetTrigger>
             <SheetContent className="w-[330px] overflow-y-auto sm:w-[380px]">
               <SheetHeader>
-                <SheetTitle>About Pluto AI Trader</SheetTitle>
+                <SheetTitle>About Titanic Hub</SheetTitle>
                 <SheetDescription>
                   A trading hub for Deriv synthetic indices.
                 </SheetDescription>
@@ -483,8 +506,9 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                   automatic two-decimal stake rounding.
                 </p>
                 <p>
-                  Recovery mode lets you fall back to Over, Under, Even or Odd contracts after a
-                  loss, and returns to differs as soon as a recovery contract wins.
+                  Recovery mode falls back to Only Ups / Only Downs contracts after a loss, with
+                  your own tick duration and stake, hedging both directions at once if you pick
+                  both, and returns to differs as soon as recovery comes out in profit.
                 </p>
                 <p>
                   Stop loss, take profit, live stats and a full trade log keep every run under
@@ -498,7 +522,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                     if (outcome === "unavailable")
                       toast.info(
                         installed
-                          ? "Pluto Trader is already installed"
+                          ? "Titanic Hub is already installed"
                           : "Use your browser menu → Add to Home Screen to install",
                       );
                   }}
@@ -507,7 +531,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                   {installed ? "Installed" : canInstall ? "Install app" : "Install app"}
                 </Button>
                 <p className="text-xs">
-                  Installs Pluto Trader to your device and opens it full screen, without browser
+                  Installs Titanic Hub to your device and opens it full screen, without browser
                   chrome.
                 </p>
                 <Separator />
@@ -808,79 +832,219 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
             {recoveryOn && (
               <div className="mt-4 space-y-4 rounded-lg border border-primary/30 bg-accent/30 p-3">
                 <div>
-                  <Label className="mb-1.5 block text-xs">Recovery contracts</Label>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {RECOVERY_KINDS.map((k) => {
-                      const active = recoveryKinds.includes(k.value);
-                      const order = recoveryKinds.indexOf(k.value) + 1;
+                  <Label className="mb-1.5 block text-xs">
+                    Recovery contract (pick both for hedging)
+                  </Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {RECOVERY_SIDES.map((s) => {
+                      const active = recoverySides.includes(s.value);
                       return (
                         <button
-                          key={k.value}
+                          key={s.value}
                           type="button"
                           onClick={() =>
-                            setRecoveryKinds((prev) =>
-                              prev.includes(k.value)
-                                ? prev.filter((x) => x !== k.value)
-                                : [...prev, k.value],
-                            )
+                            setRecoverySides((prev) => {
+                              const next = prev.includes(s.value)
+                                ? prev.filter((x) => x !== s.value)
+                                : [...prev, s.value];
+                              if (next.length > 1)
+                                toast.warning(
+                                  "Hedge mode: Only Ups and Only Downs will be sent at the same time, on the same entry spot.",
+                                );
+                              return next;
+                            })
                           }
                           className={cn(
-                            "relative rounded-lg border px-2 py-2 text-xs font-semibold transition-colors",
+                            "rounded-lg border px-2 py-2 text-left text-xs font-semibold transition-colors",
                             active
                               ? "border-primary bg-primary text-primary-foreground"
                               : "border-border bg-card hover:border-primary/50",
                           )}
                         >
-                          {k.label}
-                          {active && (
-                            <span className="absolute right-1 top-0.5 text-[10px] opacity-80">
-                              {order}
-                            </span>
-                          )}
+                          {s.label}
+                          <span
+                            className={cn(
+                              "mt-0.5 block text-[10px] font-normal",
+                              active ? "opacity-80" : "text-muted-foreground",
+                            )}
+                          >
+                            {s.hint}
+                          </span>
                         </button>
                       );
                     })}
                   </div>
                 </div>
 
-                {recoveryKinds.length > 1 && (
-                  <div>
-                    <Label className="mb-1.5 block text-xs">
-                      Transition between recovery contracts
-                    </Label>
-                    <Select
-                      value={kindTransition}
-                      onValueChange={(v) => setKindTransition(v as Transition)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {TRANSITIONS.map((t) => (
-                          <SelectItem key={t.value} value={t.value}>
-                            {t.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                {recoverySides.length > 1 && (
+                  <p className="rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-medium">
+                    Hedge mode is on. Both contracts are bought at the same moment, share the same
+                    entry spot and settle on the same exit spot.
+                  </p>
+                )}
+
+                {recoverySides.length > 0 && (
+                  <div className="rounded-lg border border-border bg-card p-3">
+                    <p className="mb-2 text-xs font-semibold">Trade duration (ticks)</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      {recoverySides.includes("up") && (
+                        <Field
+                          label="Only Ups ticks"
+                          value={upTicks}
+                          onChange={(v) => setUpTicks(v.replace(/[^0-9]/g, ""))}
+                        />
+                      )}
+                      {recoverySides.includes("down") && (
+                        <Field
+                          label="Only Downs ticks"
+                          value={downTicks}
+                          onChange={(v) => setDownTicks(v.replace(/[^0-9]/g, ""))}
+                        />
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Deriv's minimum for these contracts is {MIN_RECOVERY_TICKS} ticks. Lower
+                      values are raised to {MIN_RECOVERY_TICKS}.
+                    </p>
                   </div>
                 )}
 
-                {recoveryKinds.includes("over") && (
-                  <PredictionPanel
-                    title="Over prediction"
-                    selection={overSel}
-                    onChange={setOverSel}
-                    toggleDigit={toggleDigit}
-                  />
+                {recoverySides.length > 0 && (
+                  <div className="rounded-lg border border-border bg-card p-3">
+                    <p className="mb-2 text-xs font-semibold">Stake mode</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <ModeCard
+                        active={recStakeMode === "differs"}
+                        title="Differs stake"
+                        subtitle="Same stake, martingaled"
+                        onClick={() => setRecStakeMode("differs")}
+                      />
+                      <ModeCard
+                        active={recStakeMode === "custom"}
+                        title="Different stake"
+                        subtitle="Set it per contract"
+                        onClick={() => setRecStakeMode("custom")}
+                      />
+                    </div>
+                    {recStakeMode === "custom" ? (
+                      <div className="mt-3 space-y-2">
+                        <div className="grid grid-cols-2 gap-3">
+                          {recoverySides.includes("up") && (
+                            <Field label="Only Ups stake" value={upStake} onChange={setUpStake} />
+                          )}
+                          {recoverySides.includes("down") && (
+                            <Field
+                              label="Only Downs stake"
+                              value={downStake}
+                              onChange={setDownStake}
+                            />
+                          )}
+                        </div>
+                        <div className="pointer-events-none select-none opacity-50">
+                          <Label className="mb-1.5 block text-xs">
+                            Differs stake (not used in recovery)
+                          </Label>
+                          <Input value={stake} readOnly disabled />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Recovery uses these stakes only. Differs goes back to its own stake as
+                          soon as recovery wins.
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Recovery uses the Differs stake with the martingale applied.
+                      </p>
+                    )}
+                  </div>
                 )}
-                {recoveryKinds.includes("under") && (
-                  <PredictionPanel
-                    title="Under prediction"
-                    selection={underSel}
-                    onChange={setUnderSel}
-                    toggleDigit={toggleDigit}
-                  />
+
+                {recoverySides.length > 0 && (
+                  <div className="rounded-lg border border-border bg-card p-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold">Choose what happens after a loss</p>
+                      <Switch checked={afterLossOn} onCheckedChange={setAfterLossOn} />
+                    </div>
+                    {afterLossOn && (
+                      <div className="mt-3 space-y-3">
+                        <div>
+                          <Label className="mb-1.5 block text-xs">After a recovery loss</Label>
+                          <Select
+                            value={afterLossMode}
+                            onValueChange={(v) => setAfterLossMode(v as AfterLossMode)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="different-ticks">
+                                Trade recovery again with a different number of ticks
+                              </SelectItem>
+                              <SelectItem value="same-ticks">
+                                Keep trading with the first trade duration
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {afterLossMode === "different-ticks" && (
+                          <div className="grid grid-cols-2 gap-3">
+                            {(afterSingleSide && recoverySides.length > 1
+                              ? [afterSide]
+                              : recoverySides
+                            ).includes("up") && (
+                              <Field
+                                label="Only Ups ticks"
+                                value={afterUpTicks}
+                                onChange={(v) => setAfterUpTicks(v.replace(/[^0-9]/g, ""))}
+                              />
+                            )}
+                            {(afterSingleSide && recoverySides.length > 1
+                              ? [afterSide]
+                              : recoverySides
+                            ).includes("down") && (
+                              <Field
+                                label="Only Downs ticks"
+                                value={afterDownTicks}
+                                onChange={(v) => setAfterDownTicks(v.replace(/[^0-9]/g, ""))}
+                              />
+                            )}
+                          </div>
+                        )}
+                        {recoverySides.length > 1 && (
+                          <div className="space-y-2 rounded-md border border-border p-3">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs font-medium">
+                                Drop hedging and recover with one contract
+                              </p>
+                              <Switch
+                                checked={afterSingleSide}
+                                onCheckedChange={setAfterSingleSide}
+                              />
+                            </div>
+                            {afterSingleSide && (
+                              <Select
+                                value={afterSide}
+                                onValueChange={(v) => setAfterSide(v as RecoverySide)}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="up">{sideLabel("up")}</SelectItem>
+                                  <SelectItem value="down">{sideLabel("down")}</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {!afterLossOn && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Off: recovery keeps repeating with the first trade duration until it wins.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -1069,77 +1233,5 @@ function ModeCard({
       <p className="text-sm font-semibold">{title}</p>
       <p className={cn("text-xs", active ? "opacity-80" : "text-muted-foreground")}>{subtitle}</p>
     </button>
-  );
-}
-
-function PredictionPanel({
-  title,
-  selection,
-  onChange,
-  toggleDigit,
-}: {
-  title: string;
-  selection: DigitSelection;
-  onChange: (s: DigitSelection) => void;
-  toggleDigit: (list: number[], d: number) => number[];
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-card p-3">
-      <p className="mb-2 text-xs font-semibold">{title}</p>
-      <div className="mb-3 grid grid-cols-2 gap-2">
-        <ModeCard
-          active={selection.mode === "multi"}
-          title="Multi"
-          subtitle="Several digits"
-          onClick={() => onChange({ ...selection, mode: "multi" })}
-        />
-        <ModeCard
-          active={selection.mode === "single"}
-          title="Single"
-          subtitle="One digit"
-          onClick={() => onChange({ ...selection, mode: "single" })}
-        />
-      </div>
-      {selection.mode === "single" ? (
-        <div className="max-w-40">
-          <Label className="mb-1.5 block text-xs">Prediction digit</Label>
-          <Input
-            inputMode="numeric"
-            value={String(selection.digit)}
-            onChange={(e) =>
-              onChange({
-                ...selection,
-                digit: Math.min(9, Math.max(0, parseInt(e.target.value.slice(-1), 10) || 0)),
-              })
-            }
-          />
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <DigitGrid
-            selected={selection.digits}
-            onToggle={(d) => onChange({ ...selection, digits: toggleDigit(selection.digits, d) })}
-          />
-          <div>
-            <Label className="mb-1.5 block text-xs">Transition between digits</Label>
-            <Select
-              value={selection.transition}
-              onValueChange={(v) => onChange({ ...selection, transition: v as Transition })}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TRANSITIONS.map((t) => (
-                  <SelectItem key={t.value} value={t.value}>
-                    {t.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      )}
-    </div>
   );
 }
