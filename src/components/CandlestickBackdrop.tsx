@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 const CANDLES = [
   { left: "3%", height: 54, wick: 88, delay: "-1s", duration: "8s", down: false },
   { left: "11%", height: 82, wick: 118, delay: "-5s", duration: "11s", down: true },
@@ -28,7 +30,7 @@ export function CandlestickBackdrop() {
             "--candle-delay": candle.delay,
             "--candle-duration": candle.duration,
             "--candle-offset": `${(index % 4) * 13}px`,
-          } as React.CSSProperties}
+          } as CSSProperties}
         />
       ))}
     </div>
