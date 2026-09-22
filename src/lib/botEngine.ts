@@ -1,9 +1,20 @@
 import { fetchAppMarkupPct, type DerivWS } from "./deriv";
 
-export type ContractType = "DIGITDIFF" | "DIGITOVER" | "DIGITUNDER" | "DIGITEVEN" | "DIGITODD";
-export type RecoveryKind = "over" | "under" | "even" | "odd";
+export type ContractType =
+  | "DIGITDIFF"
+  | "DIGITOVER"
+  | "DIGITUNDER"
+  | "DIGITEVEN"
+  | "DIGITODD"
+  | "RUNHIGH"
+  | "RUNLOW";
+
+/** "up" = Only Ups (RUNHIGH), "down" = Only Downs (RUNLOW). */
+export type RecoverySide = "up" | "down";
 export type Transition = "onloss" | "random" | "sequential";
 export type SpeedMode = "normal" | "everytick";
+export type RecoveryStakeMode = "differs" | "custom";
+export type AfterLossMode = "different-ticks" | "same-ticks";
 
 export interface DigitSelection {
   mode: "single" | "multi";
@@ -12,12 +23,28 @@ export interface DigitSelection {
   transition: Transition;
 }
 
+export interface SidePair {
+  up: number;
+  down: number;
+}
+
 export interface RecoveryConfig {
   enabled: boolean;
-  kinds: RecoveryKind[];
-  kindTransition: Exclude<Transition, "random"> | "random";
-  over: DigitSelection;
-  under: DigitSelection;
+  /** Selected recovery contracts. Both selected = hedge mode. */
+  sides: RecoverySide[];
+  /** Trade duration in ticks for the first recovery attempt (min 2). */
+  duration: SidePair;
+  stakeMode: RecoveryStakeMode;
+  /** Used when stakeMode is "custom". */
+  stake: SidePair;
+  afterLoss: {
+    enabled: boolean;
+    mode: AfterLossMode;
+    duration: SidePair;
+    /** After a hedged recovery loss, recover with a single contract only. */
+    singleSide: boolean;
+    side: RecoverySide;
+  };
 }
 
 export type SwitchMode = "runs" | "losses" | "consecutive";
@@ -96,7 +123,16 @@ const CONTRACT_LABEL: Record<ContractType, string> = {
   DIGITUNDER: "Digit Under",
   DIGITEVEN: "Digit Even",
   DIGITODD: "Digit Odd",
+  RUNHIGH: "Only Ups",
+  RUNLOW: "Only Downs",
 };
+
+export const SIDE_CONTRACT: Record<RecoverySide, ContractType> = {
+  up: "RUNHIGH",
+  down: "RUNLOW",
+};
+
+export const MIN_RECOVERY_TICKS = 2;
 
 function isWinFor(type: ContractType, digit: number, barrier: number | null) {
   switch (type) {
@@ -110,6 +146,8 @@ function isWinFor(type: ContractType, digit: number, barrier: number | null) {
       return digit % 2 === 0;
     case "DIGITODD":
       return digit % 2 === 1;
+    default:
+      return false;
   }
 }
 
@@ -136,9 +174,10 @@ export class BotEngine {
 
   // selection cursors
   private differIdx = 0;
-  private recoveryKindIdx = 0;
-  private recoveryDigitIdx = 0;
-  private inRecovery = false;
+
+  /** 0 = trading differs, 1 = first recovery attempt, 2 = after-loss recovery. */
+  private recoveryStage = 0;
+  private recoveryBusy = false;
 
   // pause + market switching
   private paused = false;
@@ -204,10 +243,8 @@ export class BotEngine {
   start() {
     this.currentStake = round2(this.cfg.stake);
     this.cb.onStake(this.currentStake);
-    this.inRecovery = false;
+    this.recoveryStage = 0;
     this.differIdx = 0;
-    this.recoveryKindIdx = 0;
-    this.recoveryDigitIdx = 0;
     this.resetMarketCounters();
     this.paused = false;
     this.running = true;
@@ -219,6 +256,7 @@ export class BotEngine {
     this.paused = false;
     this.buying = false;
     this.pendings = [];
+    this.recoveryStage = 0;
     this.cb.onStatus(reason);
   }
 
@@ -232,7 +270,8 @@ export class BotEngine {
   resume() {
     if (!this.running) return;
     this.paused = false;
-    this.cb.onStatus(this.inRecovery ? "Recovery mode" : "Running");
+    this.cb.onStatus(this.recoveryStage > 0 ? "Recovery mode" : "Running");
+    if (this.recoveryStage > 0 && !this.recoveryBusy) void this.runRecovery();
   }
 
   get isPaused() {
@@ -261,8 +300,7 @@ export class BotEngine {
 
     const everyTick = this.cfg.speed === "everytick";
 
-    // Settle the in-flight contract on the FIRST tick after purchase (1 tick
-    // duration), so every-tick mode trades on consecutive ticks.
+    // Settle the in-flight differs contract on the FIRST tick after purchase.
     if (this.pendings.length > 0) {
       const p = this.pendings.shift()!;
       const win = isWinFor(p.type, digit, p.barrier);
@@ -273,6 +311,7 @@ export class BotEngine {
     }
 
     if (!this.running || this.paused || this.switching) return;
+    if (this.recoveryStage > 0 || this.recoveryBusy) return;
     if (this.buying || this.pendings.length > 0) return;
 
     if (!everyTick && this.skipTick) {
@@ -287,30 +326,11 @@ export class BotEngine {
   }
 
 
-
-  private nextContract(): { type: ContractType; barrier: number | null } {
-    if (this.inRecovery && this.cfg.recovery.enabled && this.cfg.recovery.kinds.length) {
-      const kinds = this.cfg.recovery.kinds;
-      if (this.cfg.recovery.kindTransition === "random")
-        this.recoveryKindIdx = Math.floor(Math.random() * kinds.length);
-      const kind = kinds[this.recoveryKindIdx % kinds.length]!;
-      if (kind === "even") return { type: "DIGITEVEN", barrier: null };
-      if (kind === "odd") return { type: "DIGITODD", barrier: null };
-      const sel = kind === "over" ? this.cfg.recovery.over : this.cfg.recovery.under;
-      return {
-        type: kind === "over" ? "DIGITOVER" : "DIGITUNDER",
-        barrier: this.pickDigit(sel, "recovery"),
-      };
-    }
-    return { type: "DIGITDIFF", barrier: this.pickDigit(this.cfg.differ, "differ") };
-  }
-
-  private pickDigit(sel: DigitSelection, scope: "differ" | "recovery"): number {
+  private pickDigit(sel: DigitSelection): number {
     if (sel.mode === "single" || sel.digits.length === 0) return sel.digit;
     const list = sel.digits;
     if (sel.transition === "random") return list[Math.floor(Math.random() * list.length)]!;
-    const idx = scope === "differ" ? this.differIdx : this.recoveryDigitIdx;
-    return list[idx % list.length]!;
+    return list[this.differIdx % list.length]!;
   }
 
   private advanceCursors(win: boolean) {
@@ -319,22 +339,9 @@ export class BotEngine {
       if (differ.transition === "sequential") this.differIdx++;
       else if (differ.transition === "onloss" && !win) this.differIdx++;
     }
-    if (this.cfg.recovery.enabled) {
-      const rec = this.cfg.recovery;
-      const kind = rec.kinds[this.recoveryKindIdx % Math.max(rec.kinds.length, 1)];
-      const sel = kind === "over" ? rec.over : kind === "under" ? rec.under : null;
-      if (sel && sel.mode === "multi" && sel.digits.length > 1) {
-        if (sel.transition === "sequential") this.recoveryDigitIdx++;
-        else if (sel.transition === "onloss" && !win) this.recoveryDigitIdx++;
-      }
-      if (rec.kinds.length > 1) {
-        if (rec.kindTransition === "sequential") this.recoveryKindIdx++;
-        else if (rec.kindTransition === "onloss" && !win) this.recoveryKindIdx++;
-      }
-    }
   }
 
-  private processResult(
+  private recordTrade(
     win: boolean,
     profit: number,
     digit: number,
@@ -364,42 +371,51 @@ export class BotEngine {
       profit,
       win,
     });
+  }
 
-    const wasRecovery = this.inRecovery;
-
-    // Martingale (synchronous)
-    const base = round2(this.cfg.stake);
-    const multiplier = this.cfg.martingale;
-    if (win) {
-      this.currentStake = base;
-    } else if (!isNaN(multiplier) && multiplier > 1) {
-      this.currentStake = round2(this.currentStake * multiplier);
-    }
-    this.cb.onStake(this.currentStake);
-
-    // Recovery state machine
-    if (this.cfg.recovery.enabled && this.cfg.recovery.kinds.length) {
-      if (!wasRecovery && !win) {
-        this.inRecovery = true;
-        this.recoveryKindIdx = 0;
-        this.recoveryDigitIdx = 0;
-        this.cb.onStatus("Recovery mode");
-      } else if (wasRecovery && win) {
-        this.inRecovery = false;
-        this.cb.onStatus("Running");
-      }
-    }
-
-    this.advanceCursors(win);
-
+  /** Returns false when a stop-loss / take-profit ended the run. */
+  private checkTargets(): boolean {
     if (this.cfg.takeProfit > 0 && this.stats.profit >= this.cfg.takeProfit) {
       this.stop("Take profit reached");
       this.cb.onStop("Take profit reached");
-      return;
+      return false;
     }
     if (this.cfg.stopLoss > 0 && this.stats.profit <= -this.cfg.stopLoss) {
       this.stop("Stop loss reached");
       this.cb.onStop("Stop loss reached");
+      return false;
+    }
+    return true;
+  }
+
+  private applyMartingale(win: boolean) {
+    const base = round2(this.cfg.stake);
+    const multiplier = this.cfg.martingale;
+    if (win) this.currentStake = base;
+    else if (!isNaN(multiplier) && multiplier > 1)
+      this.currentStake = round2(this.currentStake * multiplier);
+    this.cb.onStake(this.currentStake);
+  }
+
+  private processResult(
+    win: boolean,
+    profit: number,
+    digit: number,
+    p: { type: ContractType; barrier: number | null; buyPrice: number; entrySpot: string },
+    exitSpot: string,
+  ) {
+    this.recordTrade(win, profit, digit, p, exitSpot);
+    this.applyMartingale(win);
+    this.advanceCursors(win);
+
+    if (!this.checkTargets()) return;
+
+    // A differs loss hands control to the Only Ups / Only Downs recovery.
+    const rec = this.cfg.recovery;
+    if (!win && rec.enabled && rec.sides.length > 0) {
+      this.recoveryStage = 1;
+      this.cb.onStatus("Recovery mode");
+      void this.runRecovery();
       return;
     }
 
@@ -437,7 +453,7 @@ export class BotEngine {
     void this.subscribeTicks(next)
       .then(() => {
         this.cb.onMarketSwitch?.(next);
-        this.cb.onStatus(this.inRecovery ? "Recovery mode" : "Running");
+        this.cb.onStatus(this.recoveryStage > 0 ? "Recovery mode" : "Running");
       })
       .catch((e: any) => {
         this.stop(e?.message || "Market switch failed");
@@ -449,39 +465,165 @@ export class BotEngine {
   }
 
 
+  // ---------------------------------------------------------------- recovery
+
+  private recoveryTicks(n: number) {
+    return Math.max(MIN_RECOVERY_TICKS, Math.floor(n || MIN_RECOVERY_TICKS));
+  }
+
+  private recoveryStake(side: RecoverySide) {
+    const rec = this.cfg.recovery;
+    if (rec.stakeMode === "custom") {
+      const value = side === "up" ? rec.stake.up : rec.stake.down;
+      return round2(Math.max(0.35, value || 0.35));
+    }
+    return round2(this.currentStake);
+  }
+
+  /** Loops recovery rounds until one comes out in profit (or the run stops). */
+  private async runRecovery() {
+    if (this.recoveryBusy) return;
+    this.recoveryBusy = true;
+    try {
+      while (this.running && !this.paused && !this.switching && this.recoveryStage > 0) {
+        const rec = this.cfg.recovery;
+        if (!rec.enabled || rec.sides.length === 0) {
+          this.recoveryStage = 0;
+          break;
+        }
+
+        const stage = this.recoveryStage;
+        let sides = rec.sides.slice();
+        let durations: SidePair = { ...rec.duration };
+
+        if (stage >= 2 && rec.afterLoss.enabled) {
+          if (rec.afterLoss.mode === "different-ticks") durations = { ...rec.afterLoss.duration };
+          if (rec.afterLoss.singleSide && rec.sides.length > 1) sides = [rec.afterLoss.side];
+        }
+
+        const net = await this.runRecoveryRound(sides, durations);
+        if (!this.running) break;
+
+        if (net > 0) {
+          this.recoveryStage = 0;
+          this.cb.onStatus("Running");
+          this.evaluateSwitch(true);
+          break;
+        }
+
+        this.evaluateSwitch(false);
+        if (!this.running) break;
+        if (stage === 1 && rec.afterLoss.enabled) this.recoveryStage = 2;
+      }
+    } catch (error: any) {
+      const reason = error?.message || "Recovery trade failed";
+      this.stop(reason);
+      this.cb.onStop(reason);
+    } finally {
+      this.recoveryBusy = false;
+    }
+  }
+
+  /** Buys the selected recovery contracts (hedged when both) and settles them. */
+  private async runRecoveryRound(sides: RecoverySide[], durations: SidePair): Promise<number> {
+    const hedge = sides.length > 1;
+    this.cb.onStatus(
+      hedge
+        ? `Recovery · hedge (${this.recoveryTicks(durations.up)}/${this.recoveryTicks(durations.down)} ticks)`
+        : `Recovery · ${sides[0] === "up" ? "Only Ups" : "Only Downs"} (${this.recoveryTicks(
+            durations[sides[0]!],
+          )} ticks)`,
+    );
+
+    const entrySpot = this.lastPrice;
+
+    // Hedging: both contracts are sent at the same moment, same entry spot.
+    const bought = await Promise.all(
+      sides.map(async (side) => {
+        const stake = this.recoveryStake(side);
+        const ticks = this.recoveryTicks(durations[side]);
+        const buy = await this.buyContract(SIDE_CONTRACT[side], stake, ticks, null);
+        return { side, stake, buy };
+      }),
+    );
+
+    const settled = await Promise.all(
+      bought.map(async (b) => ({
+        ...b,
+        contract: await this.waitForContract(Number(b.buy.contract_id)),
+      })),
+    );
+
+    let net = 0;
+    for (const s of settled) {
+      const profit = round2(Number(s.contract?.profit ?? -Number(s.buy.buy_price ?? s.stake)));
+      const win = profit > 0;
+      net = round2(net + profit);
+      const exitSpot = String(
+        s.contract?.exit_tick_display_value ?? s.contract?.current_spot_display_value ?? "—",
+      );
+      const digit = parseInt(exitSpot[exitSpot.length - 1] ?? "0", 10) || 0;
+      this.recordTrade(
+        win,
+        profit,
+        digit,
+        {
+          type: SIDE_CONTRACT[s.side],
+          barrier: null,
+          buyPrice: Number(s.buy.buy_price ?? s.stake),
+          entrySpot: String(s.contract?.entry_tick_display_value ?? entrySpot),
+        },
+        exitSpot,
+      );
+    }
+
+    // Winning the recovery resets the stake, losing martingales it.
+    this.applyMartingale(net > 0);
+    this.checkTargets();
+    return net;
+  }
+
+  private waitForContract(contractId: number): Promise<any> {
+    return new Promise((resolve, reject) => {
+      let off: (() => void) | null = null;
+      const timer = setTimeout(() => {
+        off?.();
+        reject(new Error("Deriv did not settle the recovery contract in time"));
+      }, 180000);
+      off = this.ws.onMessage((msg: any) => {
+        const c = msg?.proposal_open_contract;
+        if (msg?.msg_type !== "proposal_open_contract" || !c) return;
+        if (Number(c.contract_id) !== contractId) return;
+        if (c.is_sold || c.status === "won" || c.status === "lost") {
+          clearTimeout(timer);
+          off?.();
+          resolve(c);
+        }
+      });
+      this.ws
+        .send({ proposal_open_contract: 1, contract_id: contractId, subscribe: 1 })
+        .catch((e: any) => {
+          clearTimeout(timer);
+          off?.();
+          reject(new Error(e?.message || "Could not track the recovery contract"));
+        });
+    });
+  }
+
+
   private async placeTrade() {
     if (this.buying || !this.running || this.paused || this.switching) return;
     this.buying = true;
     const stake = round2(this.currentStake);
-    const { type, barrier } = this.nextContract();
+    const barrier = this.pickDigit(this.cfg.differ);
     const entrySpot = this.lastPrice;
 
-    const contractParams: Record<string, any> = {
-      amount: stake,
-      basis: "stake",
-      contract_type: type,
-      currency: this.cfg.currency || "USD",
-      duration: 1,
-      duration_unit: "t",
-    };
-    if (barrier !== null) contractParams["barrier"] = String(barrier);
-
     try {
-      const buyRes: any =
-        this.ws.mode === "pat"
-          ? await this.buyViaProposal(contractParams, stake)
-          : await this.ws.send({
-              buy: 1,
-              price: stake,
-              parameters: { ...contractParams, symbol: this.cfg.symbol },
-            });
-
-      const buy = buyRes?.buy;
-      if (!buy) throw new Error("Deriv did not confirm the purchase");
+      const buy = await this.buyContract("DIGITDIFF", stake, 1, barrier);
       this.pendings.push({
         buyPrice: Number(buy.buy_price ?? stake),
         payout: Number(buy.payout ?? 0),
-        type,
+        type: "DIGITDIFF",
         barrier,
         entrySpot,
       });
@@ -491,6 +633,36 @@ export class BotEngine {
       this.stop(error?.message || "Trade failed");
       this.cb.onStop(error?.message || "Trade failed");
     }
+  }
+
+  private async buyContract(
+    type: ContractType,
+    stake: number,
+    ticks: number,
+    barrier: number | null,
+  ): Promise<any> {
+    const contractParams: Record<string, any> = {
+      amount: stake,
+      basis: "stake",
+      contract_type: type,
+      currency: this.cfg.currency || "USD",
+      duration: ticks,
+      duration_unit: "t",
+    };
+    if (barrier !== null) contractParams["barrier"] = String(barrier);
+
+    const buyRes: any =
+      this.ws.mode === "pat"
+        ? await this.buyViaProposal(contractParams, stake)
+        : await this.ws.send({
+            buy: 1,
+            price: stake,
+            parameters: { ...contractParams, symbol: this.cfg.symbol },
+          });
+
+    const buy = buyRes?.buy;
+    if (!buy) throw new Error("Deriv did not confirm the purchase");
+    return buy;
   }
 
 
