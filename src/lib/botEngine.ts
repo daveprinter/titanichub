@@ -645,6 +645,7 @@ export class BotEngine {
     const stake = round2(this.currentStake);
     const barrier = this.pickDigit(this.cfg.differ);
     const entrySpot = this.lastPrice;
+    const tickId = this.tickSeq;
 
     try {
       const buy = await this.buyContract("DIGITDIFF", stake, 1, barrier);
@@ -654,13 +655,27 @@ export class BotEngine {
         type: "DIGITDIFF",
         barrier,
         entrySpot,
+        tickId,
       });
       this.buying = false;
     } catch (error: any) {
       this.buying = false;
-      this.stop(error?.message || "Trade failed");
-      this.cb.onStop(error?.message || "Trade failed");
+      // A single rejected purchase must never end the run: only a manual stop,
+      // take profit or stop loss does that. Report it and keep trading.
+      this.reportTradeIssue(error);
     }
+  }
+
+  /** Surfaces a non-fatal trade problem without ending the run. */
+  private reportTradeIssue(error: any) {
+    const msg = String(error?.message || "Trade could not be placed");
+    if (!this.running) return;
+    if (isFatalTradeError(msg)) {
+      this.stop(msg);
+      this.cb.onStop(msg);
+      return;
+    }
+    this.cb.onStatus(`Retrying · ${msg}`);
   }
 
   private async buyContract(
