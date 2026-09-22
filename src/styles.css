@@ -69,19 +69,19 @@
   --card-foreground: oklch(0.129 0.042 264.695);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
+  --primary: oklch(0.52 0.21 262);
+  --primary-foreground: oklch(0.99 0 0);
   --secondary: oklch(0.968 0.007 247.896);
   --secondary-foreground: oklch(0.208 0.042 265.755);
   --muted: oklch(0.968 0.007 247.896);
   --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
+  --accent: oklch(0.95 0.03 255);
+  --accent-foreground: oklch(0.4 0.16 262);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.984 0.003 247.858);
   --border: oklch(0.929 0.013 255.508);
   --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
+  --ring: oklch(0.52 0.21 262);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -98,14 +98,14 @@
 }
 
 .dark {
-  --background: oklch(0.129 0.042 264.695);
+  --background: oklch(0.16 0.03 262);
   --foreground: oklch(0.984 0.003 247.858);
-  --card: oklch(0.208 0.042 265.755);
+  --card: oklch(0.21 0.035 262);
   --card-foreground: oklch(0.984 0.003 247.858);
   --popover: oklch(0.208 0.042 265.755);
   --popover-foreground: oklch(0.984 0.003 247.858);
-  --primary: oklch(0.929 0.013 255.508);
-  --primary-foreground: oklch(0.208 0.042 265.755);
+  --primary: oklch(0.62 0.19 258);
+  --primary-foreground: oklch(0.99 0 0);
   --secondary: oklch(0.279 0.041 260.031);
   --secondary-foreground: oklch(0.984 0.003 247.858);
   --muted: oklch(0.279 0.041 260.031);
@@ -137,8 +137,51 @@
     border-color: var(--color-border);
   }
 
+  html {
+    /* Avoid mobile compositing artifacts (ghost/repeated bands) while scrolling
+       a long, frequently re-rendering page. */
+    -webkit-tap-highlight-color: transparent;
+    overflow-anchor: none;
+  }
+
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    /* Force the page onto its own compositor layer so partial repaints during
+       scroll cannot leave stale strips behind. */
+    transform: translateZ(0);
+    backface-visibility: hidden;
   }
+}
+
+
+
+@theme inline {
+  --color-win: var(--win);
+  --color-loss: var(--loss);
+}
+
+:root {
+  --win: oklch(0.62 0.14 175);
+  --loss: oklch(0.6 0.22 25);
+  --surface-grad: linear-gradient(135deg, oklch(0.52 0.21 262), oklch(0.62 0.16 240));
+}
+
+.dark {
+  --win: oklch(0.72 0.15 172);
+  --loss: oklch(0.68 0.2 22);
+}
+
+/* Visually hide the Lovable badge overlay without disabling it in project settings. */
+#lovable-badge,
+a#lovable-badge,
+[id^="lovable-badge"],
+[class*="lovable-badge"],
+a[href*="lovable.dev/projects"],
+a[href*="lovable.dev?utm"],
+a[href*="lovable.dev/?utm"] {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
 }
