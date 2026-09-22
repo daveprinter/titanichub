@@ -542,7 +542,19 @@ export class BotEngine {
           if (rec.afterLoss.singleSide && rec.sides.length > 1) sides = [rec.afterLoss.side];
         }
 
-        const net = await this.runRecoveryRound(sides, durations);
+        let net = 0;
+        try {
+          // When hedging, net is the difference between the Only Ups and
+          // Only Downs results — the round only counts as recovered above zero.
+          net = await this.runRecoveryRound(sides, durations);
+        } catch (error: any) {
+          // A failed or slow recovery round is retried; it never ends the run
+          // unless the account itself cannot trade.
+          this.reportTradeIssue(error);
+          if (!this.running) break;
+          await this.waitForTick();
+          continue;
+        }
         if (!this.running) break;
 
         if (net > 0) {
@@ -560,10 +572,6 @@ export class BotEngine {
         // away, normal speed leaves one idle tick between recovery rounds.
         if (this.cfg.speed !== "everytick" && this.running) await this.waitForTick();
       }
-    } catch (error: any) {
-      const reason = error?.message || "Recovery trade failed";
-      this.stop(reason);
-      this.cb.onStop(reason);
     } finally {
       this.recoveryBusy = false;
     }
