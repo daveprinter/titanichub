@@ -673,10 +673,12 @@ export class BotEngine {
     const stake = round2(this.currentStake);
     const barrier = this.pickDigit(this.cfg.differ);
     const entrySpot = this.lastPrice;
-    const tickId = this.tickSeq;
 
     try {
       const buy = await this.buyContract("DIGITDIFF", stake, 1, barrier);
+      // Stamp with the tick that was current when Deriv confirmed the buy, so the
+      // contract settles on the next tick — never on a stale one.
+      const tickId = this.tickSeq;
       this.pendings.push({
         buyPrice: Number(buy.buy_price ?? stake),
         payout: Number(buy.payout ?? 0),
