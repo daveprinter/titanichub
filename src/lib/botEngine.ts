@@ -497,8 +497,8 @@ export class BotEngine {
         this.cb.onStatus(this.recoveryStage > 0 ? "Recovery mode" : "Running");
       })
       .catch((e: any) => {
-        this.stop(e?.message || "Market switch failed");
-        this.cb.onStop(e?.message || "Market switch failed");
+        // Keep trading on the current market instead of ending the run.
+        this.reportTradeIssue(e);
       })
       .finally(() => {
         this.switching = false;
