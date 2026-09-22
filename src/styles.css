@@ -139,21 +139,21 @@
 }
 
 @keyframes market-line-pulse {
-  0%, 100% { opacity: 0.25; transform: scaleX(0.94); }
-  50% { opacity: 0.58; transform: scaleX(1); }
+  0%, 100% { opacity: 0.45; transform: scaleX(0.94); }
+  50% { opacity: 0.85; transform: scaleX(1); }
 }
 
 .license-market-bg {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  background: linear-gradient(155deg, oklch(0.14 0.045 160), oklch(0.23 0.075 155) 54%, oklch(0.12 0.035 170));
+  background: linear-gradient(155deg, oklch(0.18 0.06 160), oklch(0.32 0.11 155) 54%, oklch(0.15 0.05 170));
 }
 
 .license-market-grid {
   position: absolute;
   inset: 0;
-  opacity: 0.18;
+  opacity: 0.32;
   background-image:
     linear-gradient(to right, oklch(0.75 0.12 155 / 28%) 1px, transparent 1px),
     linear-gradient(to bottom, oklch(0.75 0.12 155 / 22%) 1px, transparent 1px);
@@ -179,8 +179,8 @@
   width: var(--candle-width);
   height: var(--candle-height);
   border-radius: 3px;
-  background: oklch(0.72 0.2 151 / 72%);
-  box-shadow: 0 0 24px oklch(0.72 0.2 151 / 28%);
+  background: oklch(0.8 0.23 151 / 95%);
+  box-shadow: 0 0 34px oklch(0.82 0.23 151 / 60%);
   animation: candle-drift var(--candle-duration) ease-in-out var(--candle-delay) infinite alternate;
 }
 
@@ -191,16 +191,16 @@
   top: calc((var(--wick-height) - var(--candle-height)) / -2);
   width: 2px;
   height: var(--wick-height);
-  background: oklch(0.82 0.13 152 / 74%);
+  background: oklch(0.9 0.16 152 / 95%);
 }
 
 .license-candle-down {
-  background: oklch(0.64 0.2 25 / 52%);
-  box-shadow: 0 0 22px oklch(0.64 0.2 25 / 18%);
+  background: oklch(0.7 0.23 25 / 88%);
+  box-shadow: 0 0 30px oklch(0.7 0.23 25 / 48%);
 }
 
 .license-candle-down::before {
-  background: oklch(0.72 0.15 25 / 58%);
+  background: oklch(0.8 0.18 25 / 9%);
 }
 
 @media (prefers-reduced-motion: reduce) {

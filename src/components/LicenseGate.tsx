@@ -27,8 +27,7 @@ export function LicenseGate({
   return (
     <div className="relative isolate flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10">
       <CandlestickBackdrop />
-      <div className="absolute inset-0 bg-background/30 backdrop-blur-[1px]" aria-hidden="true" />
-      <Card className="relative z-10 w-full max-w-md border-primary/20 bg-card/92 p-6 shadow-2xl shadow-primary/15 backdrop-blur-xl">
+      <Card className="relative z-10 w-full max-w-md border-primary/30 bg-card/80 p-6 shadow-2xl shadow-primary/30 ring-1 ring-primary/10 backdrop-blur-2xl">
         <div className="flex flex-col items-center text-center">
           <img
             src={titanicLogo}
