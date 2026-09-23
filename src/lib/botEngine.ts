@@ -272,6 +272,8 @@ export class BotEngine {
 
   start() {
     this.currentStake = round2(this.cfg.stake);
+    this.recCustomStake = null;
+
     this.cb.onStake(this.currentStake);
     this.recoveryStage = 0;
     this.differIdx = 0;
