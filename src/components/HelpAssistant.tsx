@@ -20,7 +20,7 @@ const TOPICS: Topic[] = [
       { label: "My license key was revoked", message: "My Titanic Hub license key has been revoked. Please help me restore it." },
       { label: "My license key is suspended", message: "My Titanic Hub license key is suspended. Please help me reactivate it." },
       { label: "It says my device is not registered", message: "Titanic Hub says this device is not registered with my license key. Please reset my device." },
-      { label: "My license expired / I want to renew", message: "My Titanic Hub license has expired. I want to renew my monthly subscription ($10)." },
+      { label: "My license expired / I want to renew", message: "My Titanic Hub license has expired. I want to renew my monthly subscription ($20)." },
       { label: "I never received my license key", message: "I paid for Titanic Hub but I have not received my license key yet." },
     ],
   },

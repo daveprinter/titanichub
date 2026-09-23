@@ -608,7 +608,7 @@ export function AdminPanel({ open, onOpenChange }: { open: boolean; onOpenChange
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="monthly">Monthly ($10)</SelectItem>
+                    <SelectItem value="monthly">Monthly ($20)</SelectItem>
                     <SelectItem value="custom">Custom days</SelectItem>
                     <SelectItem value="lifetime">Lifetime</SelectItem>
                   </SelectContent>
