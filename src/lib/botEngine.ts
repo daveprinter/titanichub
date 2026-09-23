@@ -664,7 +664,7 @@ export class BotEngine {
     }
 
     // Winning the recovery resets the stake, losing martingales it.
-    this.applyMartingale(net > 0);
+    this.applyRecoveryMartingale(net > 0);
     this.checkTargets();
     return net;
   }
