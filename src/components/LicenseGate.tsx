@@ -38,7 +38,7 @@ export function LicenseGate({
           />
           <h1 className="mt-4 text-xl font-bold">Titanic Hub</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Licensed automated Deriv digit trading hub — $10 per month, per device.
+            Licensed automated Deriv digit trading hub — $20 per month, per device.
           </p>
         </div>
 
