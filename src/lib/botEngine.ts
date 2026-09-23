@@ -272,6 +272,8 @@ export class BotEngine {
 
   start() {
     this.currentStake = round2(this.cfg.stake);
+    this.recCustomStake = null;
+
     this.cb.onStake(this.currentStake);
     this.recoveryStage = 0;
     this.differIdx = 0;
@@ -512,14 +514,47 @@ export class BotEngine {
     return Math.max(MIN_RECOVERY_TICKS, Math.floor(n || MIN_RECOVERY_TICKS));
   }
 
-  private recoveryStake(side: RecoverySide) {
+  /** Live per-side stakes while recovering with a custom (different) stake. */
+  private recCustomStake: SidePair | null = null;
+
+  private baseCustomStake(side: RecoverySide) {
     const rec = this.cfg.recovery;
-    if (rec.stakeMode === "custom") {
-      const value = side === "up" ? rec.stake.up : rec.stake.down;
-      return round2(Math.max(0.35, value || 0.35));
+    const value = side === "up" ? rec.stake.up : rec.stake.down;
+    return round2(Math.max(0.35, value || 0.35));
+  }
+
+  private recoveryStake(side: RecoverySide) {
+    if (this.cfg.recovery.stakeMode === "custom") {
+      if (!this.recCustomStake)
+        this.recCustomStake = { up: this.baseCustomStake("up"), down: this.baseCustomStake("down") };
+      return round2(Math.max(0.35, this.recCustomStake[side]));
     }
     return round2(this.currentStake);
   }
+
+  /** Martingales the recovery stake after a losing recovery round. */
+  private applyRecoveryMartingale(win: boolean) {
+    if (this.cfg.recovery.stakeMode !== "custom") {
+      this.applyMartingale(win);
+      return;
+    }
+    const multiplier = this.cfg.martingale;
+    if (win) {
+      // Recovery done: back to Differs on its original stake.
+      this.recCustomStake = null;
+      this.applyMartingale(true);
+      return;
+    }
+    if (!this.recCustomStake)
+      this.recCustomStake = { up: this.baseCustomStake("up"), down: this.baseCustomStake("down") };
+    if (!isNaN(multiplier) && multiplier > 1) {
+      this.recCustomStake = {
+        up: round2(this.recCustomStake.up * multiplier),
+        down: round2(this.recCustomStake.down * multiplier),
+      };
+    }
+  }
+
 
   /** Loops recovery rounds until one comes out in profit (or the run stops). */
   private async runRecovery() {
@@ -631,7 +666,7 @@ export class BotEngine {
     }
 
     // Winning the recovery resets the stake, losing martingales it.
-    this.applyMartingale(net > 0);
+    this.applyRecoveryMartingale(net > 0);
     this.checkTargets();
     return net;
   }
