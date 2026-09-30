@@ -26,14 +26,7 @@ export interface DigitSelection {
   reorderOnSwitch: boolean;
 }
 
-export interface SidePair {
-  up: number;
-  down: number;
-  rise: number;
-  fall: number;
-  over: number;
-  under: number;
-}
+export type SidePair = Record<RecoverySide, number>;
 
 export interface RecoveryConfig {
   enabled: boolean;
@@ -228,6 +221,7 @@ export class BotEngine {
   private recoveryIndex = 0;
   private recoveryLosses = 0;
   private recoveryFinishedForSwitch = false;
+  private orderedAfterRecoverySwitch = false;
 
   // pause + market switching
   private paused = false;
@@ -299,6 +293,7 @@ export class BotEngine {
     this.differIdx = 0;
     this.recoveryIndex = 0;
     this.recoveryLosses = 0;
+    this.orderedAfterRecoverySwitch = false;
     this.resetMarketCounters();
     this.paused = false;
     this.running = true;
@@ -394,7 +389,8 @@ export class BotEngine {
 
   private pickDigit(sel: DigitSelection): number {
     if (sel.mode === "single" || sel.digits.length === 0) return sel.digit;
-    const list = sel.digits;
+    const list = this.orderedAfterRecoverySwitch && sel.transition === "sequential"
+      ? [...sel.digits].sort((a, b) => a - b) : sel.digits;
     if (sel.transition === "random") return list[Math.floor(Math.random() * list.length)]!;
     return list[this.differIdx % list.length]!;
   }
@@ -518,9 +514,8 @@ export class BotEngine {
     this.cb.onStatus(`Switching market…`);
     void this.subscribeTicks(next)
       .then(() => {
-          if (this.recoveryFinishedForSwitch && this.cfg.differ.reorderOnSwitch) {
-          // Begin the new market with the selected digits in ascending order.
-          this.cfg = { ...this.cfg, differ: { ...this.cfg.differ, digits: [...this.cfg.differ.digits].sort((a, b) => a - b) } };
+        if (this.recoveryFinishedForSwitch && this.cfg.differ.reorderOnSwitch) {
+          this.orderedAfterRecoverySwitch = true;
           this.differIdx = 0;
         }
         this.cb.onMarketSwitch?.(next);
@@ -545,7 +540,7 @@ export class BotEngine {
   }
 
   /** Live per-side stakes while recovering with a custom (different) stake. */
-  private recCustomStake: SidePair | null = null;
+  private recCustomStake: Partial<SidePair> | null = null;
 
   private baseCustomStake(side: RecoverySide) {
     const rec = this.cfg.recovery;
@@ -555,9 +550,8 @@ export class BotEngine {
 
   private recoveryStake(side: RecoverySide) {
     if (this.cfg.recovery.stakeMode === "custom") {
-      if (!this.recCustomStake)
-        this.recCustomStake = Object.fromEntries(this.cfg.recovery.sides.map((s) => [s, this.baseCustomStake(s)])) as SidePair;
-      return round2(Math.max(0.35, this.recCustomStake[side]));
+      if (!this.recCustomStake) this.recCustomStake = {};
+      return round2(Math.max(0.35, this.recCustomStake[side] ?? this.baseCustomStake(side)));
     }
     return round2(this.currentStake);
   }
@@ -575,10 +569,11 @@ export class BotEngine {
       this.applyMartingale(true);
       return;
     }
-    if (!this.recCustomStake)
-      this.recCustomStake = Object.fromEntries(this.cfg.recovery.sides.map((s) => [s, this.baseCustomStake(s)])) as SidePair;
+    if (!this.recCustomStake) this.recCustomStake = {};
     if (!isNaN(multiplier) && multiplier > 1) {
-      this.recCustomStake = Object.fromEntries(Object.entries(this.recCustomStake).map(([side, stake]) => [side, round2(stake * multiplier)])) as SidePair;
+      for (const side of this.cfg.recovery.sides) {
+        this.recCustomStake[side] = round2((this.recCustomStake[side] ?? this.baseCustomStake(side)) * multiplier);
+      }
     }
   }
 
@@ -597,7 +592,9 @@ export class BotEngine {
 
         const stage = this.recoveryStage;
         const hedge = rec.sides.length === 2 && rec.sides.includes("up") && rec.sides.includes("down");
-        let sides = hedge ? rec.sides.slice() : [rec.sides[this.recoveryIndex % rec.sides.length]];
+        const selected = rec.sides[this.recoveryIndex % rec.sides.length];
+        if (!selected) break;
+        let sides: RecoverySide[] = hedge ? rec.sides.slice() : [selected];
         let durations: SidePair = { ...rec.duration };
 
         if (stage >= 2 && rec.afterLoss.enabled) {
@@ -653,10 +650,12 @@ export class BotEngine {
   /** Buys the selected recovery contracts (hedged when both) and settles them. */
   private async runRecoveryRound(sides: RecoverySide[], durations: SidePair): Promise<number> {
     const hedge = sides.length > 1;
+    const first = sides[0];
+    if (!first) return 0;
     this.cb.onStatus(
       hedge
         ? `Recovery · hedge (${this.recoveryTicks(durations.up, "up")}/${this.recoveryTicks(durations.down, "down")} ticks)`
-        : `Recovery · ${CONTRACT_LABEL[SIDE_CONTRACT[sides[0]]]} (${this.recoveryTicks(durations[sides[0]], sides[0])} ticks)`,
+        : `Recovery · ${CONTRACT_LABEL[SIDE_CONTRACT[first]]} (${this.recoveryTicks(durations[first], first)} ticks)`,
     );
 
     const entrySpot = this.lastPrice;
