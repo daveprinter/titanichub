@@ -29,6 +29,10 @@ export interface DigitSelection {
 export interface SidePair {
   up: number;
   down: number;
+  rise: number;
+  fall: number;
+  over: number;
+  under: number;
 }
 
 export interface RecoveryConfig {
@@ -484,7 +488,7 @@ export class BotEngine {
     this.evaluateSwitch(win);
   }
 
-  private evaluateSwitch(win: boolean) {
+  private evaluateSwitch(win: boolean, allowSwitch = true) {
     const sw = this.cfg.switcher;
     this.marketRuns++;
     if (win) this.marketStreak = 0;
@@ -492,7 +496,7 @@ export class BotEngine {
       this.marketLosses++;
       this.marketStreak++;
     }
-    if (!sw?.enabled || sw.markets.length < 2 || !this.running) return;
+    if (!allowSwitch || !sw?.enabled || sw.markets.length < 2 || !this.running) return;
     const count = Math.max(1, Math.floor(sw.count || 0));
     const hit =
       sw.mode === "runs"
@@ -503,7 +507,8 @@ export class BotEngine {
     if (!hit) return;
 
     const idx = sw.markets.indexOf(this.cfg.symbol);
-    const next = sw.markets[(idx + 1) % sw.markets.length]!;
+    const next = sw.markets[(idx + 1) % sw.markets.length];
+    if (!next) return;
     if (next === this.cfg.symbol) {
       this.resetMarketCounters();
       return;
@@ -513,7 +518,7 @@ export class BotEngine {
     this.cb.onStatus(`Switching market…`);
     void this.subscribeTicks(next)
       .then(() => {
-        if (this.recoveryFinishedForSwitch && this.cfg.differ.reorderOnSwitch) {
+          if (this.recoveryFinishedForSwitch && this.cfg.differ.reorderOnSwitch) {
           // Begin the new market with the selected digits in ascending order.
           this.cfg = { ...this.cfg, differ: { ...this.cfg.differ, digits: [...this.cfg.differ.digits].sort((a, b) => a - b) } };
           this.differIdx = 0;
@@ -631,7 +636,7 @@ export class BotEngine {
           this.recoveryIndex = (this.recoveryIndex + 1) % rec.sides.length;
           this.recoveryLosses = 0;
         }
-        this.evaluateSwitch(false);
+        this.evaluateSwitch(false, false);
         if (!this.running) break;
         if (stage === 1 && rec.afterLoss.enabled) this.recoveryStage = 2;
         if (this.switching) break;
@@ -661,7 +666,8 @@ export class BotEngine {
       sides.map(async (side) => {
         const stake = this.recoveryStake(side);
         const ticks = this.recoveryTicks(durations[side], side);
-        const barrier = side === "over" || side === "under" ? Math.min(9, Math.max(0, recBarrier(this.cfg.recovery.barriers[side]))) : null;
+        const barrier = side === "over" ? Math.min(8, Math.max(0, Math.floor(this.cfg.recovery.barriers.over)))
+          : side === "under" ? Math.min(9, Math.max(1, Math.floor(this.cfg.recovery.barriers.under))) : null;
         const buy = await this.buyContract(SIDE_CONTRACT[side], stake, ticks, barrier);
         return { side, stake, buy, barrier };
       }),
