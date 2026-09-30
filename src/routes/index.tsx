@@ -114,7 +114,6 @@ function PlutoApp() {
 }
 
 
-const ticks = (v: string) => Math.max(MIN_RECOVERY_TICKS, parseInt(v, 10) || MIN_RECOVERY_TICKS);
 const money2 = (v: string) => Math.round((parseFloat(v) || 0.35) * 100) / 100;
 
 const TRANSITIONS: { value: Transition; label: string }[] = [
@@ -930,7 +929,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                       {recoverySides.map((s) => <Field key={s} label={`${sideLabel(s)} ticks`} value={recoveryValue(s, "ticks")} onChange={(v) => setRecoveryValue(s, "ticks", v.replace(/[^0-9]/g, ""))} />)}
                     </div>
                     <p className="mt-2 text-xs text-muted-foreground">
-                      Only Ups, Only Downs, Rise and Fall use at least {MIN_RECOVERY_TICKS} ticks; Digit Over and Under start at 1 tick.
+                      Only Ups and Only Downs use at least {MIN_RECOVERY_TICKS} ticks. Rise, Fall, Digit Over and Digit Under start at 1 tick.
                     </p>
                     {recoverySides.includes("over") && <Field label="Digit Over barrier (0–8)" value={overBarrier} onChange={(v) => setOverBarrier(v.replace(/[^0-9]/g, "").slice(-1))} />}
                     {recoverySides.includes("under") && <Field label="Digit Under barrier (1–9)" value={underBarrier} onChange={(v) => setUnderBarrier(v.replace(/[^0-9]/g, "").slice(-1))} />}

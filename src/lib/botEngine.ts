@@ -142,7 +142,7 @@ export const SIDE_CONTRACT: Record<RecoverySide, ContractType> = {
 };
 
 export const MIN_RECOVERY_TICKS = 2;
-export const minRecoveryTicks = (side: RecoverySide) => side === "over" || side === "under" ? 1 : MIN_RECOVERY_TICKS;
+export const minRecoveryTicks = (side: RecoverySide) => side === "up" || side === "down" ? MIN_RECOVERY_TICKS : 1;
 
 /**
  * Only account-level problems end a run. Everything else (a rejected proposal,
@@ -472,7 +472,7 @@ export class BotEngine {
 
     if (!this.checkTargets()) return;
 
-    // A differs loss hands control to the Only Ups / Only Downs recovery.
+    // A differs loss hands control to the selected recovery contracts.
     const rec = this.cfg.recovery;
     if (!win && rec.enabled && rec.sides.length > 0) {
       this.recoveryStage = 1;
