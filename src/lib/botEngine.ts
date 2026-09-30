@@ -7,10 +7,12 @@ export type ContractType =
   | "DIGITEVEN"
   | "DIGITODD"
   | "RUNHIGH"
-  | "RUNLOW";
+  | "RUNLOW"
+  | "CALL"
+  | "PUT";
 
 /** "up" = Only Ups (RUNHIGH), "down" = Only Downs (RUNLOW). */
-export type RecoverySide = "up" | "down";
+export type RecoverySide = "up" | "down" | "rise" | "fall" | "over" | "under";
 export type Transition = "onloss" | "random" | "sequential";
 export type SpeedMode = "normal" | "everytick";
 export type RecoveryStakeMode = "differs" | "custom";
@@ -21,12 +23,10 @@ export interface DigitSelection {
   digit: number;
   digits: number[];
   transition: Transition;
+  reorderOnSwitch: boolean;
 }
 
-export interface SidePair {
-  up: number;
-  down: number;
-}
+export type SidePair = Record<RecoverySide, number>;
 
 export interface RecoveryConfig {
   enabled: boolean;
@@ -37,6 +37,9 @@ export interface RecoveryConfig {
   stakeMode: RecoveryStakeMode;
   /** Used when stakeMode is "custom". */
   stake: SidePair;
+  barriers: { over: number; under: number };
+  /** Number of losing rounds per selected contract before rotating. */
+  rotateAfterLosses: number;
   afterLoss: {
     enabled: boolean;
     mode: AfterLossMode;
@@ -125,14 +128,21 @@ const CONTRACT_LABEL: Record<ContractType, string> = {
   DIGITODD: "Digit Odd",
   RUNHIGH: "Only Ups",
   RUNLOW: "Only Downs",
+  CALL: "Rise",
+  PUT: "Fall",
 };
 
 export const SIDE_CONTRACT: Record<RecoverySide, ContractType> = {
   up: "RUNHIGH",
   down: "RUNLOW",
+  rise: "CALL",
+  fall: "PUT",
+  over: "DIGITOVER",
+  under: "DIGITUNDER",
 };
 
 export const MIN_RECOVERY_TICKS = 2;
+export const minRecoveryTicks = (side: RecoverySide) => side === "up" || side === "down" ? MIN_RECOVERY_TICKS : 1;
 
 /**
  * Only account-level problems end a run. Everything else (a rejected proposal,
@@ -208,6 +218,10 @@ export class BotEngine {
   /** 0 = trading differs, 1 = first recovery attempt, 2 = after-loss recovery. */
   private recoveryStage = 0;
   private recoveryBusy = false;
+  private recoveryIndex = 0;
+  private recoveryLosses = 0;
+  private recoveryFinishedForSwitch = false;
+  private orderedAfterRecoverySwitch = false;
 
   // pause + market switching
   private paused = false;
@@ -277,6 +291,9 @@ export class BotEngine {
     this.cb.onStake(this.currentStake);
     this.recoveryStage = 0;
     this.differIdx = 0;
+    this.recoveryIndex = 0;
+    this.recoveryLosses = 0;
+    this.orderedAfterRecoverySwitch = false;
     this.resetMarketCounters();
     this.paused = false;
     this.running = true;
@@ -289,6 +306,7 @@ export class BotEngine {
     this.buying = false;
     this.pendings = [];
     this.recoveryStage = 0;
+    this.recoveryFinishedForSwitch = false;
     this.cb.onStatus(reason);
   }
 
@@ -371,7 +389,8 @@ export class BotEngine {
 
   private pickDigit(sel: DigitSelection): number {
     if (sel.mode === "single" || sel.digits.length === 0) return sel.digit;
-    const list = sel.digits;
+    const list = this.orderedAfterRecoverySwitch && sel.transition === "sequential"
+      ? [...sel.digits].sort((a, b) => a - b) : sel.digits;
     if (sel.transition === "random") return list[Math.floor(Math.random() * list.length)]!;
     return list[this.differIdx % list.length]!;
   }
@@ -453,7 +472,7 @@ export class BotEngine {
 
     if (!this.checkTargets()) return;
 
-    // A differs loss hands control to the Only Ups / Only Downs recovery.
+    // A differs loss hands control to the selected recovery contracts.
     const rec = this.cfg.recovery;
     if (!win && rec.enabled && rec.sides.length > 0) {
       this.recoveryStage = 1;
@@ -465,7 +484,7 @@ export class BotEngine {
     this.evaluateSwitch(win);
   }
 
-  private evaluateSwitch(win: boolean) {
+  private evaluateSwitch(win: boolean, allowSwitch = true) {
     const sw = this.cfg.switcher;
     this.marketRuns++;
     if (win) this.marketStreak = 0;
@@ -473,7 +492,7 @@ export class BotEngine {
       this.marketLosses++;
       this.marketStreak++;
     }
-    if (!sw?.enabled || sw.markets.length < 2 || !this.running) return;
+    if (!allowSwitch || !sw?.enabled || sw.markets.length < 2 || !this.running) return;
     const count = Math.max(1, Math.floor(sw.count || 0));
     const hit =
       sw.mode === "runs"
@@ -484,17 +503,21 @@ export class BotEngine {
     if (!hit) return;
 
     const idx = sw.markets.indexOf(this.cfg.symbol);
-    const next = sw.markets[(idx + 1) % sw.markets.length]!;
+    const next = sw.markets[(idx + 1) % sw.markets.length];
+    if (!next) return;
     if (next === this.cfg.symbol) {
       this.resetMarketCounters();
       return;
     }
     this.resetMarketCounters();
     this.switching = true;
-    this.cfg = { ...this.cfg, symbol: next };
     this.cb.onStatus(`Switching market…`);
     void this.subscribeTicks(next)
       .then(() => {
+        if (this.recoveryFinishedForSwitch && this.cfg.differ.reorderOnSwitch) {
+          this.orderedAfterRecoverySwitch = true;
+          this.differIdx = 0;
+        }
         this.cb.onMarketSwitch?.(next);
         this.cb.onStatus(this.recoveryStage > 0 ? "Recovery mode" : "Running");
       })
@@ -504,30 +527,31 @@ export class BotEngine {
       })
       .finally(() => {
         this.switching = false;
+        this.recoveryFinishedForSwitch = false;
+        if (this.running && !this.paused && this.recoveryStage > 0 && !this.recoveryBusy) void this.runRecovery();
       });
   }
 
 
   // ---------------------------------------------------------------- recovery
 
-  private recoveryTicks(n: number) {
-    return Math.max(MIN_RECOVERY_TICKS, Math.floor(n || MIN_RECOVERY_TICKS));
+  private recoveryTicks(n: number, side: RecoverySide) {
+    return Math.max(minRecoveryTicks(side), Math.floor(n || minRecoveryTicks(side)));
   }
 
   /** Live per-side stakes while recovering with a custom (different) stake. */
-  private recCustomStake: SidePair | null = null;
+  private recCustomStake: Partial<SidePair> | null = null;
 
   private baseCustomStake(side: RecoverySide) {
     const rec = this.cfg.recovery;
-    const value = side === "up" ? rec.stake.up : rec.stake.down;
+    const value = rec.stake[side];
     return round2(Math.max(0.35, value || 0.35));
   }
 
   private recoveryStake(side: RecoverySide) {
     if (this.cfg.recovery.stakeMode === "custom") {
-      if (!this.recCustomStake)
-        this.recCustomStake = { up: this.baseCustomStake("up"), down: this.baseCustomStake("down") };
-      return round2(Math.max(0.35, this.recCustomStake[side]));
+      if (!this.recCustomStake) this.recCustomStake = {};
+      return round2(Math.max(0.35, this.recCustomStake[side] ?? this.baseCustomStake(side)));
     }
     return round2(this.currentStake);
   }
@@ -545,13 +569,11 @@ export class BotEngine {
       this.applyMartingale(true);
       return;
     }
-    if (!this.recCustomStake)
-      this.recCustomStake = { up: this.baseCustomStake("up"), down: this.baseCustomStake("down") };
+    if (!this.recCustomStake) this.recCustomStake = {};
     if (!isNaN(multiplier) && multiplier > 1) {
-      this.recCustomStake = {
-        up: round2(this.recCustomStake.up * multiplier),
-        down: round2(this.recCustomStake.down * multiplier),
-      };
+      for (const side of this.cfg.recovery.sides) {
+        this.recCustomStake[side] = round2((this.recCustomStake[side] ?? this.baseCustomStake(side)) * multiplier);
+      }
     }
   }
 
@@ -569,12 +591,15 @@ export class BotEngine {
         }
 
         const stage = this.recoveryStage;
-        let sides = rec.sides.slice();
+        const hedge = rec.sides.length === 2 && rec.sides.includes("up") && rec.sides.includes("down");
+        const selected = rec.sides[this.recoveryIndex % rec.sides.length];
+        if (!selected) break;
+        let sides: RecoverySide[] = hedge ? rec.sides.slice() : [selected];
         let durations: SidePair = { ...rec.duration };
 
         if (stage >= 2 && rec.afterLoss.enabled) {
           if (rec.afterLoss.mode === "different-ticks") durations = { ...rec.afterLoss.duration };
-          if (rec.afterLoss.singleSide && rec.sides.length > 1) sides = [rec.afterLoss.side];
+          if (hedge && rec.afterLoss.singleSide) sides = [rec.afterLoss.side];
         }
 
         let net = 0;
@@ -594,14 +619,24 @@ export class BotEngine {
 
         if (net > 0) {
           this.recoveryStage = 0;
+          this.recoveryIndex = 0;
+          this.recoveryLosses = 0;
+          this.recoveryFinishedForSwitch = true;
           this.cb.onStatus("Running");
           this.evaluateSwitch(true);
+          if (!this.switching) this.recoveryFinishedForSwitch = false;
           break;
         }
 
-        this.evaluateSwitch(false);
+        this.recoveryLosses++;
+        if (!hedge && rec.sides.length > 1 && this.recoveryLosses >= Math.max(1, rec.rotateAfterLosses || 1)) {
+          this.recoveryIndex = (this.recoveryIndex + 1) % rec.sides.length;
+          this.recoveryLosses = 0;
+        }
+        this.evaluateSwitch(false, false);
         if (!this.running) break;
         if (stage === 1 && rec.afterLoss.enabled) this.recoveryStage = 2;
+        if (this.switching) break;
 
         // Recovery follows the selected speed mode: every-tick re-enters straight
         // away, normal speed leaves one idle tick between recovery rounds.
@@ -615,12 +650,12 @@ export class BotEngine {
   /** Buys the selected recovery contracts (hedged when both) and settles them. */
   private async runRecoveryRound(sides: RecoverySide[], durations: SidePair): Promise<number> {
     const hedge = sides.length > 1;
+    const first = sides[0];
+    if (!first) return 0;
     this.cb.onStatus(
       hedge
-        ? `Recovery · hedge (${this.recoveryTicks(durations.up)}/${this.recoveryTicks(durations.down)} ticks)`
-        : `Recovery · ${sides[0] === "up" ? "Only Ups" : "Only Downs"} (${this.recoveryTicks(
-            durations[sides[0]!],
-          )} ticks)`,
+        ? `Recovery · hedge (${this.recoveryTicks(durations.up, "up")}/${this.recoveryTicks(durations.down, "down")} ticks)`
+        : `Recovery · ${CONTRACT_LABEL[SIDE_CONTRACT[first]]} (${this.recoveryTicks(durations[first], first)} ticks)`,
     );
 
     const entrySpot = this.lastPrice;
@@ -629,9 +664,11 @@ export class BotEngine {
     const bought = await Promise.all(
       sides.map(async (side) => {
         const stake = this.recoveryStake(side);
-        const ticks = this.recoveryTicks(durations[side]);
-        const buy = await this.buyContract(SIDE_CONTRACT[side], stake, ticks, null);
-        return { side, stake, buy };
+        const ticks = this.recoveryTicks(durations[side], side);
+        const barrier = side === "over" ? Math.min(8, Math.max(0, Math.floor(this.cfg.recovery.barriers.over)))
+          : side === "under" ? Math.min(9, Math.max(1, Math.floor(this.cfg.recovery.barriers.under))) : null;
+        const buy = await this.buyContract(SIDE_CONTRACT[side], stake, ticks, barrier);
+        return { side, stake, buy, barrier };
       }),
     );
 
@@ -657,7 +694,7 @@ export class BotEngine {
         digit,
         {
           type: SIDE_CONTRACT[s.side],
-          barrier: null,
+          barrier: s.barrier,
           buyPrice: Number(s.buy.buy_price ?? s.stake),
           entrySpot: String(s.contract?.entry_tick_display_value ?? entrySpot),
         },
