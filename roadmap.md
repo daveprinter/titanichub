@@ -1,0 +1,4 @@
+- [ ] Show $20 monthly subscription on the dashboard.
+- [ ] Offer optional sequential digit restart/order when switching markets after recovery.
+- [ ] Add Rise, Fall, Over, Under to recovery with suitable duration, barrier, stake and transition controls.
+- [ ] Verify recovery rotation and market-switch behavior with tests and preview.
