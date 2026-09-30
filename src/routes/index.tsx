@@ -56,6 +56,7 @@ import {
 import {
   BotEngine,
   MIN_RECOVERY_TICKS,
+  minRecoveryTicks,
   emptyStats,
   type AfterLossMode,
   type EngineConfig,
@@ -117,7 +118,7 @@ const ticks = (v: string) => Math.max(MIN_RECOVERY_TICKS, parseInt(v, 10) || MIN
 const money2 = (v: string) => Math.round((parseFloat(v) || 0.35) * 100) / 100;
 
 const TRANSITIONS: { value: Transition; label: string }[] = [
-  { value: "onloss", label: "After one loses" },
+  { value: "onloss", label: "After one loss" },
   { value: "random", label: "Randomly" },
   { value: "sequential", label: "Sequentially" },
 ];
@@ -125,9 +126,14 @@ const TRANSITIONS: { value: Transition; label: string }[] = [
 const RECOVERY_SIDES: { value: RecoverySide; label: string; hint: string }[] = [
   { value: "up", label: "Only Ups", hint: "Every tick must rise" },
   { value: "down", label: "Only Downs", hint: "Every tick must fall" },
+  { value: "rise", label: "Rise", hint: "Finish higher than entry" },
+  { value: "fall", label: "Fall", hint: "Finish lower than entry" },
+  { value: "over", label: "Digit Over", hint: "Last digit above barrier" },
+  { value: "under", label: "Digit Under", hint: "Last digit below barrier" },
 ];
 
-const sideLabel = (side: RecoverySide) => (side === "up" ? "Only Ups" : "Only Downs");
+const sideLabel = (side: RecoverySide) => RECOVERY_SIDES.find((s) => s.value === side)?.label ?? side;
+const RECOVERY_KEYS: RecoverySide[] = ["up", "down", "rise", "fall", "over", "under"];
 
 function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOut: () => void }) {
   const { theme, toggle } = useTheme();
@@ -177,6 +183,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
     "differTransition",
     "onloss",
   );
+  const [reorderOnSwitch, setReorderOnSwitch] = usePersistentState("reorderOnSwitch", false);
 
   // recovery (Only Ups / Only Downs)
   const [recoveryOn, setRecoveryOn] = usePersistentState("recoveryOn", false);
@@ -201,6 +208,23 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
   const [afterDownTicks, setAfterDownTicks] = usePersistentState("recAfterDownTicks", "3");
   const [afterSingleSide, setAfterSingleSide] = usePersistentState("recAfterSingle", false);
   const [afterSide, setAfterSide] = usePersistentState<RecoverySide>("recAfterSide", "up");
+  const [recRotateLosses, setRecRotateLosses] = usePersistentState("recRotateLosses", "1");
+  const [recExtraTicks, setRecExtraTicks] = usePersistentState<Record<string, string>>("recExtraTicks", {});
+  const [recExtraStakes, setRecExtraStakes] = usePersistentState<Record<string, string>>("recExtraStakes", {});
+  const [recExtraAfterTicks, setRecExtraAfterTicks] = usePersistentState<Record<string, string>>("recExtraAfterTicks", {});
+  const [overBarrier, setOverBarrier] = usePersistentState("recOverBarrier", "5");
+  const [underBarrier, setUnderBarrier] = usePersistentState("recUnderBarrier", "5");
+  const recoveryValue = (side: RecoverySide, kind: "ticks" | "stake" | "after") =>
+    side === "up" ? (kind === "ticks" ? upTicks : kind === "stake" ? upStake : afterUpTicks) :
+    side === "down" ? (kind === "ticks" ? downTicks : kind === "stake" ? downStake : afterDownTicks) :
+    kind === "ticks" ? recExtraTicks[side] ?? (side === "over" || side === "under" ? "1" : "2") :
+    kind === "stake" ? recExtraStakes[side] ?? "0.35" : recExtraAfterTicks[side] ?? "3";
+  const setRecoveryValue = (side: RecoverySide, kind: "ticks" | "stake" | "after", value: string) => {
+    if (side === "up") return (kind === "ticks" ? setUpTicks : kind === "stake" ? setUpStake : setAfterUpTicks)(value);
+    if (side === "down") return (kind === "ticks" ? setDownTicks : kind === "stake" ? setDownStake : setAfterDownTicks)(value);
+    const setter = kind === "ticks" ? setRecExtraTicks : kind === "stake" ? setRecExtraStakes : setRecExtraAfterTicks;
+    setter((prev) => ({ ...prev, [side]: value }));
+  };
 
   // market switcher
   const [switcherOn, setSwitcherOn] = usePersistentState("switcherOn", false);
@@ -234,6 +258,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
         digit: Math.min(9, Math.max(0, parseInt(differDigit, 10) || 0)),
         digits: differDigits,
         transition: differTransition,
+        reorderOnSwitch,
       },
       switcher: {
         enabled: switcherOn,
@@ -244,13 +269,15 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
       recovery: {
         enabled: recoveryOn,
         sides: recoverySides,
-        duration: { up: ticks(upTicks), down: ticks(downTicks) },
+        duration: Object.fromEntries(RECOVERY_KEYS.map((s) => [s, Math.max(minRecoveryTicks(s), parseInt(recoveryValue(s, "ticks"), 10) || minRecoveryTicks(s))])) as EngineConfig["recovery"]["duration"],
         stakeMode: recStakeMode,
-        stake: { up: money2(upStake), down: money2(downStake) },
+        stake: Object.fromEntries(RECOVERY_KEYS.map((s) => [s, money2(recoveryValue(s, "stake"))])) as EngineConfig["recovery"]["stake"],
+        barriers: { over: Math.min(8, Math.max(0, parseInt(overBarrier, 10) || 0)), under: Math.min(9, Math.max(1, parseInt(underBarrier, 10) || 1)) },
+        rotateAfterLosses: Math.max(1, parseInt(recRotateLosses, 10) || 1),
         afterLoss: {
           enabled: afterLossOn,
           mode: afterLossMode,
-          duration: { up: ticks(afterUpTicks), down: ticks(afterDownTicks) },
+          duration: Object.fromEntries(RECOVERY_KEYS.map((s) => [s, Math.max(minRecoveryTicks(s), parseInt(recoveryValue(s, "after"), 10) || minRecoveryTicks(s))])) as EngineConfig["recovery"]["duration"],
           singleSide: afterSingleSide,
           side: afterSide,
         },
@@ -268,6 +295,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
       differDigit,
       differDigits,
       differTransition,
+      reorderOnSwitch,
       recoveryOn,
       recoverySides,
       upTicks,
@@ -281,6 +309,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
       afterDownTicks,
       afterSingleSide,
       afterSide,
+      recRotateLosses, recExtraTicks, recExtraStakes, recExtraAfterTicks, overBarrier, underBarrier,
       switcherOn,
       switchMarkets,
       switchMode,
@@ -658,6 +687,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
               <Field label="Stop loss" value={stopLoss} onChange={setStopLoss} />
               <Field label="Take profit" value={takeProfit} onChange={setTakeProfit} />
             </div>
+            <p className="mt-3 text-xs font-medium text-muted-foreground">Subscription: $20 per month, per person, per device.</p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="mb-1.5 block text-xs">Speed mode</Label>
@@ -819,6 +849,10 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
+                  <Label className="text-xs">Restart digits in ascending order after recovery switches markets</Label>
+                  <Switch checked={reorderOnSwitch} onCheckedChange={setReorderOnSwitch} />
+                </div>
               </div>
             )}
           </Card>
@@ -833,7 +867,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
               <div className="mt-4 space-y-4 rounded-lg border border-primary/30 bg-accent/30 p-3">
                 <div>
                   <Label className="mb-1.5 block text-xs">
-                    Recovery contract (pick both for hedging)
+                    Recovery contracts (Only Ups + Only Downs alone hedge)
                   </Label>
                   <div className="grid grid-cols-2 gap-2">
                     {RECOVERY_SIDES.map((s) => {
@@ -847,7 +881,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                               const next = prev.includes(s.value)
                                 ? prev.filter((x) => x !== s.value)
                                 : [...prev, s.value];
-                              if (next.length > 1)
+                              if (next.length === 2 && next.includes("up") && next.includes("down"))
                                 toast.warning(
                                   "Hedge mode: Only Ups and Only Downs will be sent at the same time, on the same entry spot.",
                                 );
@@ -876,36 +910,30 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                   </div>
                 </div>
 
-                {recoverySides.length > 1 && (
+                {recoverySides.length === 2 && recoverySides.includes("up") && recoverySides.includes("down") && (
                   <p className="rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-medium">
                     Hedge mode is on. Both contracts are bought at the same moment, share the same
                     entry spot and settle on the same exit spot.
                   </p>
+                )}
+                {recoverySides.length > 1 && !(recoverySides.length === 2 && recoverySides.includes("up") && recoverySides.includes("down")) && (
+                  <div className="border-t border-border pt-3">
+                    <Field label="After X losses on the market (per recovery contract)" value={recRotateLosses} onChange={(v) => setRecRotateLosses(v.replace(/[^0-9]/g, ""))} />
+                    <p className="mt-1 text-xs text-muted-foreground">Trade one selected contract at a time, then rotate to the next after this many losing rounds.</p>
+                  </div>
                 )}
 
                 {recoverySides.length > 0 && (
                   <div className="rounded-lg border border-border bg-card p-3">
                     <p className="mb-2 text-xs font-semibold">Trade duration (ticks)</p>
                     <div className="grid grid-cols-2 gap-3">
-                      {recoverySides.includes("up") && (
-                        <Field
-                          label="Only Ups ticks"
-                          value={upTicks}
-                          onChange={(v) => setUpTicks(v.replace(/[^0-9]/g, ""))}
-                        />
-                      )}
-                      {recoverySides.includes("down") && (
-                        <Field
-                          label="Only Downs ticks"
-                          value={downTicks}
-                          onChange={(v) => setDownTicks(v.replace(/[^0-9]/g, ""))}
-                        />
-                      )}
+                      {recoverySides.map((s) => <Field key={s} label={`${sideLabel(s)} ticks`} value={recoveryValue(s, "ticks")} onChange={(v) => setRecoveryValue(s, "ticks", v.replace(/[^0-9]/g, ""))} />)}
                     </div>
                     <p className="mt-2 text-xs text-muted-foreground">
-                      Deriv's minimum for these contracts is {MIN_RECOVERY_TICKS} ticks. Lower
-                      values are raised to {MIN_RECOVERY_TICKS}.
+                      Only Ups, Only Downs, Rise and Fall use at least {MIN_RECOVERY_TICKS} ticks; Digit Over and Under start at 1 tick.
                     </p>
+                    {recoverySides.includes("over") && <Field label="Digit Over barrier (0–8)" value={overBarrier} onChange={(v) => setOverBarrier(v.replace(/[^0-9]/g, "").slice(-1))} />}
+                    {recoverySides.includes("under") && <Field label="Digit Under barrier (1–9)" value={underBarrier} onChange={(v) => setUnderBarrier(v.replace(/[^0-9]/g, "").slice(-1))} />}
                   </div>
                 )}
 
@@ -929,16 +957,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                     {recStakeMode === "custom" ? (
                       <div className="mt-3 space-y-2">
                         <div className="grid grid-cols-2 gap-3">
-                          {recoverySides.includes("up") && (
-                            <Field label="Only Ups stake" value={upStake} onChange={setUpStake} />
-                          )}
-                          {recoverySides.includes("down") && (
-                            <Field
-                              label="Only Downs stake"
-                              value={downStake}
-                              onChange={setDownStake}
-                            />
-                          )}
+                          {recoverySides.map((s) => <Field key={s} label={`${sideLabel(s)} stake`} value={recoveryValue(s, "stake")} onChange={(v) => setRecoveryValue(s, "stake", v)} />)}
                         </div>
                         <div className="pointer-events-none select-none opacity-50">
                           <Label className="mb-1.5 block text-xs">
@@ -988,29 +1007,13 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                         </div>
                         {afterLossMode === "different-ticks" && (
                           <div className="grid grid-cols-2 gap-3">
-                            {(afterSingleSide && recoverySides.length > 1
+                            {(afterSingleSide && recoverySides.length === 2 && recoverySides.includes("up") && recoverySides.includes("down")
                               ? [afterSide]
                               : recoverySides
-                            ).includes("up") && (
-                              <Field
-                                label="Only Ups ticks"
-                                value={afterUpTicks}
-                                onChange={(v) => setAfterUpTicks(v.replace(/[^0-9]/g, ""))}
-                              />
-                            )}
-                            {(afterSingleSide && recoverySides.length > 1
-                              ? [afterSide]
-                              : recoverySides
-                            ).includes("down") && (
-                              <Field
-                                label="Only Downs ticks"
-                                value={afterDownTicks}
-                                onChange={(v) => setAfterDownTicks(v.replace(/[^0-9]/g, ""))}
-                              />
-                            )}
+                            ).map((s) => <Field key={s} label={`${sideLabel(s)} ticks`} value={recoveryValue(s, "after")} onChange={(v) => setRecoveryValue(s, "after", v.replace(/[^0-9]/g, ""))} />)}
                           </div>
                         )}
-                        {recoverySides.length > 1 && (
+                        {recoverySides.length === 2 && recoverySides.includes("up") && recoverySides.includes("down") && (
                           <div className="space-y-2 rounded-md border border-border p-3">
                             <div className="flex items-center justify-between">
                               <p className="text-xs font-medium">
