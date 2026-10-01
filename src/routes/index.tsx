@@ -890,7 +890,28 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                                 toast.warning("Hedge: Over 5 and Under 4 will be sent together on the same entry spot.");
                               }
                               return next;
-...
+                            })
+                          }
+                          className={cn(
+                            "rounded-lg border px-2 py-2 text-left text-xs font-semibold transition-colors",
+                            active
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border bg-card hover:border-primary/50",
+                          )}
+                        >
+                          {s.label}
+                          <span
+                            className={cn(
+                              "mt-0.5 block text-[10px] font-normal",
+                              active ? "opacity-80" : "text-muted-foreground",
+                            )}
+                          >
+                            {s.hint}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {(() => {
