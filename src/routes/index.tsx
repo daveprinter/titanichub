@@ -208,6 +208,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
   const [afterSingleSide, setAfterSingleSide] = usePersistentState("recAfterSingle", false);
   const [afterSide, setAfterSide] = usePersistentState<RecoverySide>("recAfterSide", "up");
   const [recRotateLosses, setRecRotateLosses] = usePersistentState("recRotateLosses", "1");
+  const [recRotateMode, setRecRotateMode] = usePersistentState<"previous-loss" | "x-losses">("recRotateMode", "previous-loss");
   const [recExtraTicks, setRecExtraTicks] = usePersistentState<Record<string, string>>("recExtraTicks", {});
   const [recExtraStakes, setRecExtraStakes] = usePersistentState<Record<string, string>>("recExtraStakes", {});
   const [recExtraAfterTicks, setRecExtraAfterTicks] = usePersistentState<Record<string, string>>("recExtraAfterTicks", {});
@@ -273,6 +274,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
         stake: Object.fromEntries(RECOVERY_KEYS.map((s) => [s, money2(recoveryValue(s, "stake"))])) as EngineConfig["recovery"]["stake"],
         barriers: { over: Math.min(8, Math.max(0, parseInt(overBarrier, 10) || 0)), under: Math.min(9, Math.max(1, parseInt(underBarrier, 10) || 1)) },
         rotateAfterLosses: Math.max(1, parseInt(recRotateLosses, 10) || 1),
+        rotateMode: recRotateMode,
         afterLoss: {
           enabled: afterLossOn,
           mode: afterLossMode,
@@ -308,7 +310,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
       afterDownTicks,
       afterSingleSide,
       afterSide,
-      recRotateLosses, recExtraTicks, recExtraStakes, recExtraAfterTicks, overBarrier, underBarrier,
+      recRotateLosses, recRotateMode, recExtraTicks, recExtraStakes, recExtraAfterTicks, overBarrier, underBarrier,
       switcherOn,
       switchMarkets,
       switchMode,
@@ -880,10 +882,13 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                               const next = prev.includes(s.value)
                                 ? prev.filter((x) => x !== s.value)
                                 : [...prev, s.value];
-                              if (next.length === 2 && next.includes("up") && next.includes("down"))
-                                toast.warning(
-                                  "Hedge mode: Only Ups and Only Downs will be sent at the same time, on the same entry spot.",
-                                );
+                              if (!prev.includes(s.value) && (s.value === "up" || s.value === "down") && next.includes("up") && next.includes("down"))
+                                toast.warning("Hedge: Only Ups and Only Downs will be sent together on the same entry spot.");
+                              if (!prev.includes(s.value) && (s.value === "over" || s.value === "under") && next.includes("over") && next.includes("under")) {
+                                setOverBarrier("5");
+                                setUnderBarrier("4");
+                                toast.warning("Hedge: Over 5 and Under 4 will be sent together on the same entry spot.");
+                              }
                               return next;
                             })
                           }
@@ -909,18 +914,32 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                   </div>
                 </div>
 
-                {recoverySides.length === 2 && recoverySides.includes("up") && recoverySides.includes("down") && (
-                  <p className="rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-medium">
-                    Hedge mode is on. Both contracts are bought at the same moment, share the same
-                    entry spot and settle on the same exit spot.
-                  </p>
-                )}
-                {recoverySides.length > 1 && !(recoverySides.length === 2 && recoverySides.includes("up") && recoverySides.includes("down")) && (
-                  <div className="border-t border-border pt-3">
-                    <Field label="After X losses on the market (per recovery contract)" value={recRotateLosses} onChange={(v) => setRecRotateLosses(v.replace(/[^0-9]/g, ""))} />
-                    <p className="mt-1 text-xs text-muted-foreground">Trade one selected contract at a time, then rotate to the next after this many losing rounds.</p>
-                  </div>
-                )}
+                {(() => {
+                  const upDown = recoverySides.includes("up") && recoverySides.includes("down");
+                  const overUnder = recoverySides.includes("over") && recoverySides.includes("under");
+                  const units = recoverySides.length - (upDown ? 1 : 0) - (overUnder ? 1 : 0);
+                  return (
+                    <>
+                      {(upDown || overUnder) && (
+                        <p className="rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-medium">
+                          Hedge is on{upDown ? " for Only Ups + Only Downs" : ""}{upDown && overUnder ? " and" : ""}{overUnder ? ` for Over ${overBarrier} + Under ${underBarrier}` : ""}. Each pair is bought at the same moment, shares the same entry spot and exits on the same tick, and counts as one contract — it is a loss only when the pair loses overall.
+                        </p>
+                      )}
+                      {units > 1 && (
+                        <div className="space-y-2 border-t border-border pt-3">
+                          <p className="text-xs font-semibold">When to switch to the next recovery contract</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <ModeCard active={recRotateMode === "previous-loss"} title="When previous loses" subtitle="Switch after every loss" onClick={() => setRecRotateMode("previous-loss")} />
+                            <ModeCard active={recRotateMode === "x-losses"} title="After X losses" subtitle="Set the count" onClick={() => setRecRotateMode("x-losses")} />
+                          </div>
+                          {recRotateMode === "x-losses" && (
+                            <Field label="Losses per recovery contract" value={recRotateLosses} onChange={(v) => setRecRotateLosses(v.replace(/[^0-9]/g, ""))} />
+                          )}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
 
                 {recoverySides.length > 0 && (
                   <div className="rounded-lg border border-border bg-card p-3">
