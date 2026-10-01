@@ -225,10 +225,6 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
-    /* Force the page onto its own compositor layer so partial repaints during
-       scroll cannot leave stale strips behind. */
-    transform: translateZ(0);
-    backface-visibility: hidden;
   }
 }
 
