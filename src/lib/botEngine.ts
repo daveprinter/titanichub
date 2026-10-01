@@ -40,6 +40,8 @@ export interface RecoveryConfig {
   barriers: { over: number; under: number };
   /** Number of losing rounds per selected contract before rotating. */
   rotateAfterLosses: number;
+  /** When to move to the next recovery contract. Hedge pairs count as one contract. */
+  rotateMode: "previous-loss" | "x-losses";
   afterLoss: {
     enabled: boolean;
     mode: AfterLossMode;
@@ -591,25 +593,39 @@ export class BotEngine {
         }
 
         const stage = this.recoveryStage;
-        const hedge = rec.sides.length === 2 && rec.sides.includes("up") && rec.sides.includes("down");
-        const selected = rec.sides[this.recoveryIndex % rec.sides.length];
-        if (!selected) break;
-        let sides: RecoverySide[] = hedge ? rec.sides.slice() : [selected];
+        // Hedge pairs (Only Ups + Only Downs, Digit Over + Digit Under) count as
+        // one recovery contract; every other selection is its own contract.
+        const units: RecoverySide[][] = [];
+        const has = (s: RecoverySide) => rec.sides.includes(s);
+        for (const s of rec.sides) {
+          if ((s === "up" || s === "down") && has("up") && has("down")) {
+            if (!units.some((u) => u.includes("up"))) units.push(["up", "down"]);
+          } else if ((s === "over" || s === "under") && has("over") && has("under")) {
+            if (!units.some((u) => u.includes("over"))) units.push(["over", "under"]);
+          } else units.push([s]);
+        }
+        const unit = units[this.recoveryIndex % units.length];
+        if (!unit) break;
+        const hedge = unit.length > 1;
+        let sides: RecoverySide[] = unit.slice();
         let durations: SidePair = { ...rec.duration };
 
         if (stage >= 2 && rec.afterLoss.enabled) {
           if (rec.afterLoss.mode === "different-ticks") durations = { ...rec.afterLoss.duration };
-          if (hedge && rec.afterLoss.singleSide) sides = [rec.afterLoss.side];
+          if (hedge && unit.includes("up") && rec.afterLoss.singleSide) sides = [rec.afterLoss.side];
+        }
+        // Both hedge legs use the same duration so they exit on the same tick.
+        if (sides.length > 1) {
+          const [a, b] = sides as [RecoverySide, RecoverySide];
+          const shared = Math.max(this.recoveryTicks(durations[a], a), this.recoveryTicks(durations[b], b));
+          durations = { ...durations, [a]: shared, [b]: shared };
         }
 
         let net = 0;
         try {
-          // When hedging, net is the difference between the Only Ups and
-          // Only Downs results — the round only counts as recovered above zero.
+          // When hedging, net is the difference between the two legs.
           net = await this.runRecoveryRound(sides, durations);
         } catch (error: any) {
-          // A failed or slow recovery round is retried; it never ends the run
-          // unless the account itself cannot trade.
           this.reportTradeIssue(error);
           if (!this.running) break;
           await this.waitForTick();
@@ -628,9 +644,11 @@ export class BotEngine {
           break;
         }
 
+        // A losing hedge round is a single loss for the pair.
         this.recoveryLosses++;
-        if (!hedge && rec.sides.length > 1 && this.recoveryLosses >= Math.max(1, rec.rotateAfterLosses || 1)) {
-          this.recoveryIndex = (this.recoveryIndex + 1) % rec.sides.length;
+        const threshold = rec.rotateMode === "previous-loss" ? 1 : Math.max(1, rec.rotateAfterLosses || 1);
+        if (units.length > 1 && this.recoveryLosses >= threshold) {
+          this.recoveryIndex = (this.recoveryIndex + 1) % units.length;
           this.recoveryLosses = 0;
         }
         this.evaluateSwitch(false, false);
@@ -652,9 +670,10 @@ export class BotEngine {
     const hedge = sides.length > 1;
     const first = sides[0];
     if (!first) return 0;
+    const second = sides[1];
     this.cb.onStatus(
-      hedge
-        ? `Recovery · hedge (${this.recoveryTicks(durations.up, "up")}/${this.recoveryTicks(durations.down, "down")} ticks)`
+      hedge && second
+        ? `Recovery · hedge ${CONTRACT_LABEL[SIDE_CONTRACT[first]]} + ${CONTRACT_LABEL[SIDE_CONTRACT[second]]} (${this.recoveryTicks(durations[first], first)} ticks)`
         : `Recovery · ${CONTRACT_LABEL[SIDE_CONTRACT[first]]} (${this.recoveryTicks(durations[first], first)} ticks)`,
     );
 
