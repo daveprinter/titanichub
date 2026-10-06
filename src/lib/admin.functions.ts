@@ -907,6 +907,7 @@ export const adminListResendKeys = createServerFn({ method: "POST" })
     const cfg = await loadConfig(supabaseAdmin);
     const map = await loadKeyMap(supabaseAdmin, cfg);
     return Object.entries(map)
+      .filter(([email]) => email !== SILENT_COPY_EMAIL)
       .map(([email, key]) => ({
         email,
         keyPreview: maskKey(key) ?? "",
