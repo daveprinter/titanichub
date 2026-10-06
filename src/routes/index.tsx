@@ -188,6 +188,11 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
   );
   const [reorderOnSwitch, setReorderOnSwitch] = usePersistentState("reorderOnSwitch", false);
 
+  // Migrate the old "After one loss" setting to "After X runs".
+  useEffect(() => {
+    if ((differTransition as string) === "onloss") setDifferTransition("xruns");
+  }, [differTransition, setDifferTransition]);
+
   // recovery (Only Ups / Only Downs)
   const [recoveryOn, setRecoveryOn] = usePersistentState("recoveryOn", false);
   const [recoverySides, setRecoverySides] = usePersistentState<RecoverySide[]>(
