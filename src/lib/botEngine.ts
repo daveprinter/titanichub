@@ -13,7 +13,7 @@ export type ContractType =
 
 /** "up" = Only Ups (RUNHIGH), "down" = Only Downs (RUNLOW). */
 export type RecoverySide = "up" | "down" | "rise" | "fall" | "over" | "under";
-export type Transition = "onloss" | "random" | "sequential";
+export type Transition = "xruns" | "random" | "sequential";
 export type SpeedMode = "normal" | "everytick";
 export type RecoveryStakeMode = "differs" | "custom";
 export type AfterLossMode = "different-ticks" | "same-ticks";
@@ -23,6 +23,8 @@ export interface DigitSelection {
   digit: number;
   digits: number[];
   transition: Transition;
+  /** Runs per digit before advancing when transition === "xruns". */
+  transitionRuns: number;
   reorderOnSwitch: boolean;
 }
 
@@ -216,6 +218,7 @@ export class BotEngine {
 
   // selection cursors
   private differIdx = 0;
+  private differRuns = 0;
 
   /** 0 = trading differs, 1 = first recovery attempt, 2 = after-loss recovery. */
   private recoveryStage = 0;
@@ -293,6 +296,7 @@ export class BotEngine {
     this.cb.onStake(this.currentStake);
     this.recoveryStage = 0;
     this.differIdx = 0;
+    this.differRuns = 0;
     this.recoveryIndex = 0;
     this.recoveryLosses = 0;
     this.orderedAfterRecoverySwitch = false;
@@ -401,7 +405,13 @@ export class BotEngine {
     const differ = this.cfg.differ;
     if (differ.mode === "multi" && differ.digits.length > 1) {
       if (differ.transition === "sequential") this.differIdx++;
-      else if (differ.transition === "onloss" && !win) this.differIdx++;
+      else if (differ.transition === "xruns") {
+        this.differRuns++;
+        if (this.differRuns >= Math.max(1, differ.transitionRuns || 1)) {
+          this.differRuns = 0;
+          this.differIdx++;
+        }
+      }
     }
   }
 

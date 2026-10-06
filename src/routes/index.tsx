@@ -117,7 +117,7 @@ function PlutoApp() {
 const money2 = (v: string) => Math.round((parseFloat(v) || 0.35) * 100) / 100;
 
 const TRANSITIONS: { value: Transition; label: string }[] = [
-  { value: "onloss", label: "After one loss" },
+  { value: "xruns", label: "After X runs" },
   { value: "random", label: "Randomly" },
   { value: "sequential", label: "Sequentially" },
 ];
@@ -180,9 +180,18 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
   const [differDigits, setDifferDigits] = usePersistentState<number[]>("differDigits", []);
   const [differTransition, setDifferTransition] = usePersistentState<Transition>(
     "differTransition",
-    "onloss",
+    "xruns",
+  );
+  const [differTransitionRuns, setDifferTransitionRuns] = usePersistentState(
+    "differTransitionRuns",
+    "3",
   );
   const [reorderOnSwitch, setReorderOnSwitch] = usePersistentState("reorderOnSwitch", false);
+
+  // Migrate the old "After one loss" setting to "After X runs".
+  useEffect(() => {
+    if ((differTransition as string) === "onloss") setDifferTransition("xruns");
+  }, [differTransition, setDifferTransition]);
 
   // recovery (Only Ups / Only Downs)
   const [recoveryOn, setRecoveryOn] = usePersistentState("recoveryOn", false);
@@ -258,6 +267,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
         digit: Math.min(9, Math.max(0, parseInt(differDigit, 10) || 0)),
         digits: differDigits,
         transition: differTransition,
+        transitionRuns: Math.max(1, parseInt(differTransitionRuns, 10) || 1),
         reorderOnSwitch,
       },
       switcher: {
@@ -296,6 +306,7 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
       differDigit,
       differDigits,
       differTransition,
+      differTransitionRuns,
       reorderOnSwitch,
       recoveryOn,
       recoverySides,
@@ -850,6 +861,17 @@ function PlutoTrader({ licenseCode, onSignOut }: { licenseCode: string; onSignOu
                     </SelectContent>
                   </Select>
                 </div>
+                {differTransition === "xruns" && (
+                  <div>
+                    <Label className="mb-1.5 block text-xs">Runs per digit</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={differTransitionRuns}
+                      onChange={(e) => setDifferTransitionRuns(e.target.value)}
+                    />
+                  </div>
+                )}
                 <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
                   <Label className="text-xs">Restart digits in ascending order after recovery switches markets</Label>
                   <Switch checked={reorderOnSwitch} onCheckedChange={setReorderOnSwitch} />
