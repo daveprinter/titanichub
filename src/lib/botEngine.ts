@@ -825,33 +825,46 @@ export class BotEngine {
     };
     if (barrier !== null) contractParams["barrier"] = String(barrier);
 
-    const buyRes: any =
-      this.ws.mode === "pat"
-        ? await this.buyViaProposal(contractParams, stake)
-        : await this.ws.send({
-            buy: 1,
-            price: stake,
-            parameters: { ...contractParams, symbol: this.cfg.symbol },
-          });
+    const symKey = this.ws.mode === "pat" ? "underlying_symbol" : "symbol";
+    const full = { ...contractParams, [symKey]: this.cfg.symbol };
+    const isUnknown = (e: any) => /unknown contract proposal|proposal/i.test(String(e?.message || ""));
 
-    const buy = buyRes?.buy;
-    if (!buy) throw new Error("Deriv did not confirm the purchase");
-    return buy;
+    // Deriv order: fresh proposal -> immediate buy on the same socket, never reuse IDs.
+    const attempts: Array<() => Promise<any>> = [
+      () => this.buyViaProposal(full, false),
+      () => this.buyViaProposal(full, false),
+      () => this.buyViaProposal(full, true),
+      () => this.ws.send({ buy: 1, price: stake, parameters: full }),
+    ];
+    let lastErr: any = null;
+    for (const attempt of attempts) {
+      try {
+        const buyRes: any = await attempt();
+        const buy = buyRes?.buy;
+        if (!buy) throw new Error("Deriv did not confirm the purchase");
+        return buy;
+      } catch (e: any) {
+        lastErr = e;
+        if (!isUnknown(e)) throw e;
+      }
+    }
+    throw lastErr || new Error("Deriv did not confirm the purchase");
   }
 
-
-  private async buyViaProposal(
-    contractParams: Record<string, any>,
-    stake: number,
-  ): Promise<any> {
+  private async buyViaProposal(params: Record<string, any>, subscribe: boolean): Promise<any> {
     const proposalRes: any = await this.ws.send({
       proposal: 1,
-      ...contractParams,
-      underlying_symbol: this.cfg.symbol,
+      ...params,
+      ...(subscribe ? { subscribe: 1 } : {}),
     });
-    const proposalId = proposalRes?.proposal?.id;
-    if (!proposalId) throw new Error("Deriv did not return a proposal ID");
-    return this.ws.send({ buy: proposalId, price: stake });
+    const proposal = proposalRes?.proposal;
+    if (!proposal?.id) throw new Error("Deriv did not return a proposal ID");
+    try {
+      return await this.ws.send({ buy: proposal.id, price: Number(proposal.ask_price) });
+    } finally {
+      const subId = proposalRes?.subscription?.id;
+      if (subscribe && subId) this.ws.send({ forget: subId }).catch(() => {});
+    }
   }
 
   destroy() {
